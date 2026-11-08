@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% set page_title = self.title()|trim if self.title is defined else '' %}
+  {% set meta_title = (product.seo_title if product is defined and product.seo_title else None) or page_title or setting('default_seo_title','راهکارهای نرم‌افزاری HJF') %}
+  <title>{{ meta_title }}</title>
+  {% set page_description = self.description()|trim if self.description is defined else '' %}
+  {% set meta_desc = (product.seo_description if product is defined and product.seo_description else None) or page_description or setting('default_seo_description') %}
+  <meta name="description" content="{{ meta_desc }}">
+  <link rel="canonical" href="{{ request.base_url }}">
+  <meta property="og:type" content="{{ 'product' if product is defined else 'website' }}">
+  <meta property="og:locale" content="fa_IR">
+  <meta property="og:title" content="{{ meta_title }}">
+  <meta property="og:description" content="{{ meta_desc }}">
+  <meta property="og:url" content="{{ request.base_url }}">
+  {% set share_image = (product.cover_path if product is defined and product.cover_path else setting('social_share_image')) %}
+  <meta property="og:image" content="{{ (share_image|media_url) if share_image else url_for('static',filename='img/brand-mark.svg',_external=True) }}">
+  <meta name="theme-color" content="#10182e">
+  <link rel="icon" href="{{ url_for('static',filename='img/brand-mark.svg') }}" type="image/svg+xml">
+  <link rel="preload" href="{{ url_for('static',filename='fonts/Vazirmatn-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ url_for('static',filename='css/main.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <a class="skip-link" href="#main-content">رفتن به محتوای اصلی</a>
+  <header class="site-header" data-header>
+    <div class="container header-inner">
+      <a href="{{ url_for('public.home') }}" class="brand" aria-label="صفحه اصلی">
+        {% if setting('brand_logo') %}<img src="{{ setting('brand_logo')|media_url }}" alt="{{ setting('brand_name') }}" class="brand-mark">{% else %}<img src="{{ url_for('static',filename='img/brand-mark.svg') }}" alt="" class="brand-mark">{% endif %}
+        <span><strong>{{ setting('brand_name','راهکارهای نرم‌افزاری HJF') }}</strong><small>SOFTWARE · AI · AUTOMATION</small></span>
+      </a>
+      <button class="menu-toggle icon-button" type="button" aria-expanded="false" aria-controls="main-nav" data-menu-toggle><span></span><span></span><span></span><b class="sr-only">بازکردن منو</b></button>
+      <nav id="main-nav" class="main-nav" aria-label="ناوبری اصلی" data-nav>
+        <a href="{{ url_for('public.home') }}" class="{{ 'active' if request.endpoint=='public.home' }}">خانه</a>
+        <a href="{{ url_for('public.products') }}" class="{{ 'active' if request.endpoint in ['public.products','public.product_detail'] }}">محصولات</a>
+        <a href="{{ url_for('public.products') }}#catalog" class="desktop-only">دسته‌بندی‌ها</a>
+        <a href="{{ url_for('public.services') }}" class="{{ 'active' if request.endpoint=='public.services' }}">خدمات</a>
+        <a href="{{ url_for('public.portfolio') }}" class="{{ 'active' if request.endpoint in ['public.portfolio','public.portfolio_detail'] }}">نمونه‌کارها</a>
+        <a href="{{ url_for('public.about') }}" class="{{ 'active' if request.endpoint=='public.about' }}">درباره ما</a>
+        <a href="{{ url_for('public.contact') }}" class="{{ 'active' if request.endpoint=='public.contact' }}">تماس</a>
+      </nav>
+      <a class="button button-primary header-cta" href="{{ url_for('public.consultation') }}">درخواست مشاوره <span aria-hidden="true">↙</span></a>
+    </div>
+  </header>
+  {% if admin_preview is defined and admin_preview %}<div class="preview-bar">پیش‌نمایش مدیریتی — این صفحه با وضعیت «{{ product.status }}» عمومی نیست. <a href="{{ url_for('admin.product_edit',product_id=product.id) }}">بازگشت به ویرایش</a></div>{% endif %}
+  <div class="flash-wrap container" aria-live="polite">
+    {% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="alert alert-{{ category }}"><span>{{ message }}</span><button type="button" aria-label="بستن" data-dismiss>×</button></div>{% endfor %}{% endwith %}
+  </div>
+  <main id="main-content">{% block content %}{% endblock %}</main>
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <a href="{{ url_for('public.home') }}" class="brand brand-light"><img src="{{ (setting('brand_logo')|media_url) if setting('brand_logo') else url_for('static',filename='img/brand-mark.svg') }}" class="brand-mark" alt=""><strong>{{ setting('brand_name') }}</strong></a>
+        <p>{{ setting('brand_description') }}</p>
+        {% if socials %}<div class="social-links">{% for social in socials %}<a href="{{ social.url }}" rel="noopener noreferrer" target="_blank">{{ social.title }}</a>{% endfor %}</div>{% endif %}
+      </div>
+      <div><h3>دسترسی سریع</h3><a href="{{ url_for('public.products') }}">کاتالوگ محصولات</a><a href="{{ url_for('public.services') }}">خدمات نرم‌افزاری</a><a href="{{ url_for('public.portfolio') }}">نمونه‌کارها</a><a href="{{ url_for('public.custom_solution') }}">سفارش راهکار اختصاصی</a></div>
+      <div><h3>ارتباط و اطلاعات</h3>{% if setting('email') %}<a href="mailto:{{ setting('email') }}" dir="ltr">{{ setting('email') }}</a>{% endif %}{% if setting('phone') %}<a href="tel:{{ setting('phone') }}">{{ setting('phone') }}</a>{% endif %}<a href="{{ url_for('public.contact') }}">فرم تماس</a><a href="{{ url_for('public.consultation') }}">درخواست مشاوره</a></div>
+      <div><h3>شفافیت و اعتماد</h3><p class="footer-note">قابلیت‌ها بر اساس کد واقعی بررسی می‌شوند؛ پیش‌نیازها و محدودیت‌ها پنهان نیستند.</p><a href="{{ url_for('public.legal',page_key='privacy') }}">حریم خصوصی</a><a href="{{ url_for('public.legal',page_key='terms') }}">شرایط استفاده</a></div>
+    </div>
+    <div class="container footer-bottom"><span>{{ setting('copyright_text') }}</span><a href="https://github.com/Alirezahjf" target="_blank" rel="noopener">GitHub / Alirezahjf ↗</a></div>
+  </footer>
+  <script src="{{ url_for('static',filename='js/main.js') }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

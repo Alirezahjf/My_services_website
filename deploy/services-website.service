@@ -1,0 +1,19 @@
+[Unit]
+Description=HJF Services Catalogue (Gunicorn)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/My_services_website
+EnvironmentFile=/srv/My_services_website/.env
+ExecStart=/srv/My_services_website/.venv/bin/gunicorn -w 4 -b 0.0.0.0:9900 "app:create_app()"
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/srv/My_services_website/instance
+
+[Install]
+WantedBy=multi-user.target
