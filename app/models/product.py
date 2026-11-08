@@ -1,6 +1,13 @@
 from app.extensions import db
 from .base import TimestampMixin
 
+product_category_links = db.Table(
+    "product_category_links",
+    db.Column("product_id", db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), primary_key=True),
+    db.Column("category_id", db.Integer, db.ForeignKey("categories.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 product_tags = db.Table(
     "product_tags",
     db.Column("product_id", db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), primary_key=True),
@@ -47,10 +54,23 @@ class Product(TimestampMixin, db.Model):
     cover_path = db.Column(db.String(255))
     accent_color = db.Column(db.String(20), default="#6d5dfc")
     github_url = db.Column(db.String(255))
+    origin_type = db.Column(db.String(40), index=True)  # github, independent, custom, hybrid
+    commercial_status = db.Column(db.String(50), index=True)
+    repository_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    repository_url = db.Column(db.String(255))
+    platforms = db.Column(db.JSON, default=list)
+    integration_status = db.Column(db.String(50), default="not_applicable")
+    ai_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    automation_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    demo_available = db.Column(db.Boolean, default=False, nullable=False)
+    pricing_visibility = db.Column(db.String(40), default="on_request")
+    product_version = db.Column(db.String(40))
+    release_date = db.Column(db.Date)
     seo_title = db.Column(db.String(180))
     seo_description = db.Column(db.String(320))
 
     category = db.relationship("Category", back_populates="products", foreign_keys=[category_id])
+    additional_categories = db.relationship("Category", secondary=product_category_links, backref="additional_products", lazy="selectin")
     features = db.relationship("ProductFeature", back_populates="product", cascade="all, delete-orphan", order_by="ProductFeature.position")
     media = db.relationship("ProductMedia", back_populates="product", cascade="all, delete-orphan", order_by="ProductMedia.position")
     faqs = db.relationship("FAQ", back_populates="product", cascade="all, delete-orphan", order_by="FAQ.position")
@@ -58,6 +78,18 @@ class Product(TimestampMixin, db.Model):
     repository = db.relationship("ProductRepository", back_populates="product", uselist=False, cascade="all, delete-orphan")
     analysis = db.relationship("RepositoryAnalysis", back_populates="product", uselist=False, cascade="all, delete-orphan")
     portfolio_links = db.relationship("ProductPortfolio", back_populates="product", cascade="all, delete-orphan")
+    connectors = db.relationship("PlatformConnector", back_populates="product", cascade="all, delete-orphan", order_by="PlatformConnector.position")
+    modules = db.relationship("ProductModule", back_populates="product", cascade="all, delete-orphan", order_by="ProductModule.position")
+    repository_memberships = db.relationship("ProductRepositoryMembership", back_populates="product", cascade="all, delete-orphan")
+
+    @property
+    def all_categories(self):
+        rows = ([self.category] if self.category else []) + list(self.additional_categories)
+        return list({row.id: row for row in rows}.values())
+
+    @property
+    def public_repository_url(self):
+        return self.repository_url or self.github_url
 
     @property
     def is_public(self):

@@ -12,12 +12,14 @@
 </svg>
 {% endmacro %}
 
+{% macro feature_status(status) %}{% set labels={'verified':'تأییدشده در کد','implemented':'پیاده‌سازی‌شده','development':'در حال توسعه','planned':'برنامه‌ریزی‌شده','api_required':'نیازمند API','platform_approval':'نیازمند تأیید پلتفرم','review':'نیازمند بررسی فنی','unsupported':'پشتیبانی نمی‌شود'} %}<span class="status-badge feature-status-{{ status }}">{{ labels.get(status,status) }}</span>{% endmacro %}
+
 {% macro product_card(product) %}
 <article class="product-card reveal" style="--product-accent:{{ product.accent_color or '#6758e8' }}">
   <a href="{{ url_for('public.product_detail',slug=product.slug) }}" class="product-card-link" aria-label="مشاهده {{ product.name }}">
     <div class="product-card-top">
       <div class="product-logo-wrap"><img src="{{ (product.logo_path|media_url) if product.logo_path else url_for('static',filename='img/product-placeholder.svg') }}" alt="لوگوی {{ product.name }}" class="product-logo" width="56" height="56" loading="lazy"></div>
-      <div class="product-card-meta"><span class="pill pill-soft">{{ product.category.name if product.category else 'راهکار نرم‌افزاری' }}</span><span class="product-type">{{ {'ai':'هوش مصنوعی','automation':'اتوماسیون','library':'کتابخانه','infrastructure':'زیرساخت','service':'سرویس','software':'نرم‌افزار'}.get(product.product_type,'نرم‌افزار') }}</span></div>
+      <div class="product-card-meta"><span class="pill pill-soft">{{ product.category.name if product.category else 'راهکار نرم‌افزاری' }}</span><span class="product-type">{{ 'معرفی اولیه · در حال توسعه' if product.commercial_status=='concept' else {'ai':'هوش مصنوعی','automation':'اتوماسیون','library':'کتابخانه','infrastructure':'زیرساخت','service':'سرویس','software':'نرم‌افزار'}.get(product.product_type,'نرم‌افزار') }}</span></div>
     </div>
     <div class="product-card-body"><h3>{{ product.name }}</h3><p class="product-tagline">{{ product.tagline }}</p><p>{{ product.short_description }}</p></div>
     {% set verified_features=product.features|selectattr('is_published')|selectattr('verification_status','equalto','verified')|list %}

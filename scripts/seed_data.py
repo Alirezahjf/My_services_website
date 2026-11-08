@@ -229,6 +229,12 @@ def seed():
                 product.features.append(ProductFeature(title=title, description=description, position=index, verification_status="verified", is_published=True))
             db.session.add(product)
             db.session.flush()
+        # Backfill lifecycle metadata only; never replace administrator-authored copy.
+        product.origin_type = product.origin_type or "github"
+        product.commercial_status = product.commercial_status or ("ready" if product.status == "published" else "development")
+        product.repository_url = product.repository_url or product.github_url
+        if product.repository:
+            product.repository_enabled = product.repository.is_enabled
         analysis = RepositoryAnalysis.query.filter_by(repository_name=data["repo"]).first()
         if not analysis:
             analysis = RepositoryAnalysis(repository_name=data["repo"], product=product)
@@ -262,13 +268,13 @@ def seed():
             db.session.add(SiteSetting(key=key, value=value, group_name="brand"))
 
     contents = [
-        ("home","hero","نرم‌افزار که کار را واقعاً ساده‌تر می‌کند","از هوش مصنوعی تا اتوماسیون؛ راهکارهای قابل بررسی برای رشد کسب‌وکار","<p>محصولات این مجموعه از پروژه‌های واقعی GitHub استخراج و بررسی شده‌اند. قابلیت‌های اعلام‌شده روشن، پیش‌نیازها شفاف و مسیر سفارشی‌سازی مشخص است.</p>",0),
+        ("home","hero","نرم‌افزار که کار را واقعاً ساده‌تر می‌کند","از هوش مصنوعی تا اتوماسیون؛ راهکارهای قابل بررسی برای رشد کسب‌وکار","<p>محصولات مخزن‌محور بر اساس کد بررسی شده‌اند و محصولات مستقل Concept با وضعیت توسعه روشن معرفی می‌شوند. قابلیت‌ها، پیش‌نیازها، اتصال‌ها و محدودیت‌ها شفاف اعلام می‌شوند.</p>",0),
         ("home","why_title","چرا این مجموعه؟","تصمیم فنی بر اساس واقعیت، نه ادعای تبلیغاتی","",1),
         ("home","why","توسعه بر پایه کد واقعی","راهکارهایی که می‌شود بررسی، سفارشی و توسعه داد","<ul><li><strong>قابلیت‌های تأییدشده:</strong> هر محصول بر اساس کد و مستندات آن معرفی می‌شود.</li><li><strong>شفافیت پیش‌نیازها:</strong> API، سرور و محدودیت‌های هر راهکار پنهان نیست.</li><li><strong>سفارشی‌سازی هدفمند:</strong> خروجی متناسب با فرایند کسب‌وکار شما توسعه می‌یابد.</li><li><strong>معماری توسعه‌پذیر:</strong> امکان یکپارچه‌سازی و افزودن قابلیت در آینده.</li></ul>",2),
         ("home","portfolio_title","نمونه‌کارها و رسانه‌های محصول","تصاویر و مستندات واقعی پس از بارگذاری مدیر در این بخش نمایش داده می‌شوند.","",3),
         ("home","faq_title","پرسش‌های پرتکرار","پیش از شروع همکاری چه چیزهایی باید بدانید؟","",4),
         ("home","cta","برای مسئله نرم‌افزاری خود یک مسیر روشن بسازید","از انتخاب محصول موجود تا طراحی راهکار اختصاصی","<p>نیاز خود را ثبت کنید تا محصول مناسب، پیش‌نیازها و مسیر پیاده‌سازی بررسی شود.</p>",5),
-        ("about","main","درباره مجموعه","مهندسی نرم‌افزار با نگاه محصول","<p>این مجموعه پروژه‌های واقعی هوش مصنوعی، اتوماسیون و زیرساخت را به راهکارهایی قابل فهم برای کسب‌وکار تبدیل می‌کند. تمرکز ما بر عملکرد واقعی، شفافیت فنی و توسعه‌پذیری است.</p><p>هر محصول پس از بررسی مخزن، ساختار و کد معرفی می‌شود. موارد ناقص در پنل مدیریت باقی می‌مانند و به‌عنوان محصول آماده منتشر نمی‌شوند.</p>",0),
+        ("about","main","درباره مجموعه","مهندسی نرم‌افزار با نگاه محصول","<p>این مجموعه پروژه‌های واقعی هوش مصنوعی، اتوماسیون و زیرساخت را به راهکارهایی قابل فهم برای کسب‌وکار تبدیل می‌کند. تمرکز ما بر عملکرد واقعی، شفافیت فنی و توسعه‌پذیری است.</p><p>محصولات مبتنی بر مخزن پس از بررسی کد معرفی می‌شوند و صفحات محصول مستقل، وضعیت Concept یا توسعه و قابلیت‌های اجرانشده را صریح نشان می‌دهند. موارد ناقص به‌عنوان نرم‌افزار آماده معرفی نمی‌شوند.</p>",0),
         ("services","main","خدمات نرم‌افزاری","از انتخاب راهکار تا توسعه اختصاصی","<p>خدمات شامل تحلیل نیاز، انتخاب و استقرار محصولات موجود، سفارشی‌سازی، اتصال API، توسعه اتوماسیون و دستیارهای هوش مصنوعی و بهبود نرم‌افزارهای فعلی است.</p>",0),
         ("contact","main","گفت‌وگو را شروع کنیم","مسئله کسب‌وکار خود را با ما در میان بگذارید","<p>برای دریافت اطلاعات بیشتر، درخواست دمو یا بررسی امکان سفارشی‌سازی فرم زیر را تکمیل کنید.</p>",0),
         ("privacy","main","حریم خصوصی","اطلاعات شما، فقط برای پیگیری درخواست","<p>اطلاعات فرم‌های تماس و مشاوره در پایگاه داده امن سایت ذخیره می‌شود و فقط مدیران مجاز برای بررسی و پیگیری درخواست به آن دسترسی دارند. این اطلاعات به‌صورت عمومی نمایش داده نمی‌شود.</p><p>فایل‌های پیوست با نام تصادفی و محدودیت نوع ذخیره می‌شوند. برای درخواست اصلاح یا حذف اطلاعات می‌توانید از راه‌های تماس اعلام‌شده استفاده کنید.</p>",0),
@@ -277,6 +283,16 @@ def seed():
     for page, section, title, subtitle, body, position in contents:
         if not PageContent.query.filter_by(page_key=page, section_key=section).first():
             db.session.add(PageContent(page_key=page, section_key=section, title=title, subtitle=subtitle, body=body, position=position))
+
+    # Upgrade only the two original stock paragraphs; administrator-customized copy stays untouched.
+    stock_updates = {
+        ("home", "hero"): ("<p>محصولات این مجموعه از پروژه‌های واقعی GitHub استخراج و بررسی شده‌اند. قابلیت‌های اعلام‌شده روشن، پیش‌نیازها شفاف و مسیر سفارشی‌سازی مشخص است.</p>", "<p>محصولات مخزن‌محور بر اساس کد بررسی شده‌اند و محصولات مستقل Concept با وضعیت توسعه روشن معرفی می‌شوند. قابلیت‌ها، پیش‌نیازها، اتصال‌ها و محدودیت‌ها شفاف اعلام می‌شوند.</p>"),
+        ("about", "main"): ("<p>هر محصول پس از بررسی مخزن، ساختار و کد معرفی می‌شود. موارد ناقص در پنل مدیریت باقی می‌مانند و به‌عنوان محصول آماده منتشر نمی‌شوند.</p>", "<p>محصولات مبتنی بر مخزن پس از بررسی کد معرفی می‌شوند و صفحات محصول مستقل، وضعیت Concept یا توسعه و قابلیت‌های اجرانشده را صریح نشان می‌دهند. موارد ناقص به‌عنوان نرم‌افزار آماده معرفی نمی‌شوند.</p>"),
+    }
+    for (page, section), (old_body, new_body) in stock_updates.items():
+        row = PageContent.query.filter_by(page_key=page, section_key=section).first()
+        if row and row.body == old_body:
+            row.body = new_body
 
     service_rows = [
         ("تحلیل نیاز و انتخاب راهکار", "بررسی فرایند کسب‌وکار، انتخاب محصول موجود یا تعریف دامنه توسعه اختصاصی.", "search"),
@@ -306,4 +322,6 @@ def seed():
     for index, (question, answer) in enumerate(faqs):
         if not FAQ.query.filter_by(question=question, product_id=None).first():
             db.session.add(FAQ(question=question, answer=answer, position=index))
+    from scripts.seed_concepts import seed_concepts
+    seed_concepts()
     db.session.commit()

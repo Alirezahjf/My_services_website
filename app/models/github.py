@@ -21,6 +21,19 @@ class ProductRepository(TimestampMixin, db.Model):
     logs = db.relationship("GitHubSyncLog", back_populates="repository", cascade="all, delete-orphan")
 
 
+class ProductRepositoryMembership(TimestampMixin, db.Model):
+    """Additional repositories for hybrid products; the legacy repository remains primary."""
+    __tablename__ = "product_repository_memberships"
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    repository_id = db.Column(db.Integer, db.ForeignKey("product_repositories.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = db.Column(db.String(80), default="component")
+    position = db.Column(db.Integer, default=0)
+    product = db.relationship("Product", back_populates="repository_memberships")
+    repository = db.relationship("ProductRepository", backref="product_memberships")
+    __table_args__ = (db.UniqueConstraint("product_id", "repository_id", name="uq_product_repository_membership"),)
+
+
 class GitHubSyncLog(TimestampMixin, db.Model):
     __tablename__ = "github_sync_logs"
     id = db.Column(db.Integer, primary_key=True)

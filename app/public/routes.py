@@ -1,7 +1,7 @@
 """Public, read-only catalogue and lead capture routes."""
 from pathlib import Path
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload, selectinload
 from app.extensions import db, limiter
 from app.models import Category, ContactMessage, FAQ, Lead, PageContent, Portfolio, Product, ProductPortfolio, Service, SiteSetting, SocialLink, WorkflowStep
@@ -27,9 +27,8 @@ def page_sections(page_key):
 @bp.get("/")
 def home():
     categories = Category.query.filter_by(is_visible=True).order_by(Category.position, Category.id).all()
-    counts = dict(db.session.query(Product.category_id, func.count(Product.id)).filter_by(status="published").group_by(Product.category_id).all())
     for category in categories:
-        category._published_count = counts.get(category.id, 0)
+        category._published_count = published_products().filter(or_(Product.category_id == category.id, Product.additional_categories.any(Category.id == category.id))).count()
     featured = published_products().options(selectinload(Product.features)).filter(Product.show_on_home.is_(True)).order_by(Product.position, Product.id).limit(6).all()
     portfolios = Portfolio.query.filter_by(is_published=True, show_on_home=True).order_by(Portfolio.position).limit(6).all()
     faqs = FAQ.query.filter_by(product_id=None, is_published=True).order_by(FAQ.position).all()
@@ -51,7 +50,7 @@ def products():
         term = f"%{q}%"
         query = query.filter(or_(Product.name.ilike(term), Product.short_description.ilike(term), Product.medium_description.ilike(term)))
     if category_slug:
-        query = query.join(Product.category).filter(Category.slug == category_slug)
+        query = query.filter(or_(Product.category.has(Category.slug == category_slug), Product.additional_categories.any(Category.slug == category_slug)))
     if product_type in Product.PRODUCT_TYPES:
         query = query.filter(Product.product_type == product_type)
     if featured:
@@ -74,9 +73,15 @@ def products():
 def product_detail(slug):
     product = Product.query.options(joinedload(Product.category), selectinload(Product.features),
                                     selectinload(Product.media), selectinload(Product.faqs),
-                                    selectinload(Product.portfolio_links).joinedload(ProductPortfolio.portfolio)
+                                    selectinload(Product.portfolio_links).joinedload(ProductPortfolio.portfolio),
+                                    selectinload(Product.connectors), selectinload(Product.modules),
+                                    selectinload(Product.additional_categories)
                                    ).filter_by(slug=slug, status="published").first_or_404()
-    related = published_products().options(selectinload(Product.features)).filter(Product.id != product.id, Product.category_id == product.category_id).limit(3).all()
+    related_query = published_products().options(selectinload(Product.features)).filter(Product.id != product.id)
+    category_ids = {category.id for category in product.all_categories}
+    if category_ids:
+        related_query = related_query.filter(or_(Product.category_id.in_(category_ids), Product.additional_categories.any(Category.id.in_(category_ids))))
+    related = related_query.limit(3).all()
     portfolios = [link.portfolio for link in product.portfolio_links if link.portfolio and link.portfolio.is_published and link.portfolio.show_on_product]
     form = ConsultationForm()
     form.product_id.choices = [(0, "انتخاب محصول")] + [(p.id, p.name) for p in products_for_forms()]

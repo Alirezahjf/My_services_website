@@ -1,6 +1,6 @@
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileField, MultipleFileField
-from wtforms import BooleanField, IntegerField, PasswordField, SelectField, SelectMultipleField, StringField, TextAreaField
+from wtforms import BooleanField, DateField, IntegerField, PasswordField, SelectField, SelectMultipleField, StringField, TextAreaField
 from wtforms.validators import DataRequired, EqualTo, Length, NumberRange, Optional, URL, ValidationError
 from app.models import Product
 
@@ -22,7 +22,20 @@ class ProductForm(FlaskForm):
     name = StringField("نام تجاری محصول", validators=[DataRequired(), Length(max=160)])
     repository_name = StringField("نام مخزن", validators=[Optional(), Length(max=160)])
     slug = StringField("نامک (Slug)", validators=[Optional(), Length(max=180)])
-    category_id = SelectField("دسته‌بندی", coerce=int, validators=[Optional()])
+    category_id = SelectField("دسته‌بندی اصلی", coerce=int, validators=[Optional()])
+    category_ids = SelectMultipleField("دسته‌بندی‌های مکمل", coerce=int, validators=[Optional()])
+    origin_type = SelectField("منشأ محصول", default="github", choices=[("github", "مبتنی بر GitHub"), ("independent", "محصول مستقل"), ("custom", "محصول سفارشی"), ("hybrid", "ترکیبی از چند مخزن")])
+    commercial_status = SelectField("وضعیت تجاری", default="development", choices=[("concept", "معرفی اولیه / Concept"), ("development", "در حال توسعه"), ("ready", "آماده ارائه"), ("custom", "سفارش اختصاصی"), ("internal", "داخلی")])
+    repository_enabled = BooleanField("همگام‌سازی مخزن فعال باشد")
+    repository_url = StringField("نشانی مخزن (اختیاری)", validators=[Optional(), URL(), Length(max=255)])
+    platforms_text = StringField("پلتفرم‌ها؛ جدا با ویرگول", validators=[Optional(), Length(max=500)])
+    integration_status = SelectField("وضعیت یکپارچه‌سازی", default="not_applicable", choices=[("not_applicable", "بدون اتصال"), ("planned", "برنامه‌ریزی‌شده"), ("development", "در حال توسعه"), ("api_required", "نیازمند API"), ("ready", "آماده"), ("partial", "ناقص")])
+    ai_enabled = BooleanField("موتور AI پیاده‌سازی شده است")
+    automation_enabled = BooleanField("اتوماسیون پیاده‌سازی شده است")
+    demo_available = BooleanField("دمو قابل استفاده موجود است")
+    pricing_visibility = SelectField("نمایش قیمت", default="hidden", choices=[("on_request", "برآورد پس از بررسی"), ("visible", "قیمت قابل نمایش"), ("hidden", "عدم نمایش")])
+    product_version = StringField("نسخه محصول", validators=[Optional(), Length(max=40)])
+    release_date = DateField("تاریخ انتشار (اختیاری)", validators=[Optional()])
     product_type = SelectField("نوع محصول", choices=[("software", "نرم‌افزار"), ("ai", "هوش مصنوعی"), ("automation", "اتوماسیون"), ("library", "کتابخانه"), ("infrastructure", "زیرساخت"), ("service", "سرویس")])
     status = SelectField("وضعیت", choices=[("draft", "پیش‌نویس"), ("review", "نیازمند بررسی"), ("development", "در حال توسعه"), ("ready", "آماده ارائه"), ("published", "منتشرشده"), ("archived", "آرشیوشده")])
     development_status = StringField("وضعیت توسعه", validators=[Optional(), Length(max=120)])
@@ -39,7 +52,6 @@ class ProductForm(FlaskForm):
     limitations_text = TextAreaField("محدودیت‌ها؛ هر مورد در یک خط")
     technologies_text = TextAreaField("فناوری‌ها؛ هر مورد در یک خط")
     tags_text = StringField("برچسب‌ها؛ جدا با ویرگول", validators=[Optional(), Length(max=500)])
-    github_url = StringField("نشانی GitHub", validators=[Optional(), URL(), Length(max=255)])
     accent_color = StringField("رنگ تأکیدی", validators=[Optional(), Length(max=20)])
     position = IntegerField("ترتیب نمایش", default=0, validators=[NumberRange(min=0, max=10000)])
     is_featured = BooleanField("محصول منتخب")
@@ -66,9 +78,33 @@ class FeatureForm(FlaskForm):
     description = TextAreaField("توضیح", validators=[Optional(), Length(max=3000)])
     example = TextAreaField("مثال کاربردی", validators=[Optional(), Length(max=3000)])
     icon = StringField("آیکون", default="check", validators=[Optional(), Length(max=80)])
-    verification_status = SelectField("وضعیت تأیید", choices=[("verified", "تأییدشده"), ("development", "در حال توسعه"), ("review", "نیازمند بررسی")])
+    verification_status = SelectField("وضعیت قابلیت", choices=[("verified", "تأییدشده در کد"), ("implemented", "پیاده‌سازی‌شده"), ("development", "در حال توسعه"), ("planned", "برنامه‌ریزی‌شده"), ("api_required", "نیازمند API"), ("platform_approval", "نیازمند تأیید پلتفرم"), ("review", "نیازمند بررسی فنی"), ("unsupported", "پشتیبانی نمی‌شود")])
     position = IntegerField("ترتیب", default=0)
     is_published = BooleanField("منتشر شود", default=True)
+
+
+class ConnectorForm(FlaskForm):
+    product_id = SelectField("محصول", coerce=int, validators=[DataRequired()])
+    platform = StringField("شناسه پلتفرم", validators=[DataRequired(), Length(max=80)], description="مثلاً telegram یا instagram")
+    display_name = StringField("نام نمایشی", validators=[DataRequired(), Length(max=120)])
+    adapter_key = StringField("کلید Adapter", validators=[Optional(), Length(max=120)])
+    auth_method = StringField("روش احراز هویت", validators=[Optional(), Length(max=160)])
+    connection_status = SelectField("وضعیت اتصال", choices=[("not_connected", "متصل نیست"), ("configuration_required", "نیازمند پیکربندی"), ("connected", "متصل"), ("error", "خطا"), ("disabled", "غیرفعال")])
+    capability_status = SelectField("وضعیت قابلیت", choices=[("implemented", "پیاده‌سازی‌شده"), ("development", "در حال توسعه"), ("planned", "برنامه‌ریزی‌شده"), ("api_required", "نیازمند API"), ("platform_approval", "نیازمند تأیید پلتفرم"), ("review", "نیازمند بررسی"), ("unsupported", "پشتیبانی نمی‌شود")])
+    supported_features_text = TextAreaField("قابلیت‌های پشتیبانی‌شده؛ هر مورد در یک خط")
+    limitations_text = TextAreaField("محدودیت‌ها؛ هر مورد در یک خط")
+    api_required = BooleanField("نیازمند API", default=True)
+    approval_required = BooleanField("نیازمند تأیید پلتفرم")
+    is_enabled = BooleanField("Connector فعال است")
+    position = IntegerField("ترتیب", default=0)
+
+
+class ModuleForm(FlaskForm):
+    product_id = SelectField("محصول", coerce=int, validators=[DataRequired()])
+    name = StringField("نام ماژول", validators=[DataRequired(), Length(max=160)])
+    description = TextAreaField("توضیح", validators=[Optional(), Length(max=5000)])
+    status = SelectField("وضعیت", choices=[("implemented", "پیاده‌سازی‌شده"), ("development", "در حال توسعه"), ("planned", "برنامه‌ریزی‌شده"), ("api_required", "نیازمند API"), ("review", "نیازمند بررسی")])
+    position = IntegerField("ترتیب", default=0)
 
 
 class MediaForm(FlaskForm):

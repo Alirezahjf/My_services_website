@@ -10,14 +10,14 @@ from sqlalchemy import func, or_
 from app.extensions import db, limiter
 from app.models import (ActivityLog, AdminUser, Category, ContactMessage, FAQ, GitHubSyncLog,
                         Lead, PageContent, Portfolio,
-                        PortfolioMedia, Product, ProductFeature, ProductMedia, ProductPortfolio,
+                        PortfolioMedia, PlatformConnector, Product, ProductFeature, ProductMedia, ProductModule, ProductPortfolio,
                         ProductRepository, RepositoryAnalysis, Service, SiteSetting, SocialLink, Tag, WorkflowStep)
 from app.github_sync.service import sync_repository
 from app.services.activity import log_activity
 from app.services.media_service import MediaValidationError, delete_upload, save_upload
 from app.services.utils import client_ip_hash, slugify, split_lines
-from .forms import (CategoryForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LoginForm,
-                    MediaForm, PageContentForm, PasswordForm, PortfolioForm, ProductForm,
+from .forms import (CategoryForm, ConnectorForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LoginForm,
+                    MediaForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, ProductForm,
                     ServiceForm, SettingsForm, SocialForm, WorkflowForm)
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -146,8 +146,14 @@ def products():
 
 
 def populate_product_form(form, product=None):
-    form.category_id.choices = [(0, "بدون دسته‌بندی")] + [(c.id, c.name) for c in Category.query.order_by(Category.position).all()]
+    category_choices = [(c.id, c.name) for c in Category.query.order_by(Category.position).all()]
+    form.category_id.choices = [(0, "بدون دسته‌بندی")] + category_choices
+    form.category_ids.choices = category_choices
     if product:
+        form.repository_url.data = product.public_repository_url
+        form.repository_enabled.data = product.repository.is_enabled if product.repository else product.repository_enabled
+        form.category_ids.data = [c.id for c in product.additional_categories]
+        form.platforms_text.data = "، ".join(product.platforms or [])
         form.use_cases_text.data = "\n".join(product.use_cases or [])
         form.target_audience_text.data = "\n".join(product.target_audience or [])
         form.prerequisites_text.data = "\n".join(product.prerequisites or [])
@@ -159,11 +165,15 @@ def populate_product_form(form, product=None):
 def apply_product_form(form, product):
     fields = ["name", "repository_name", "tagline", "short_description", "medium_description",
               "full_description", "value_proposition", "problem_statement", "product_type",
-              "status", "development_status", "confidence", "github_url", "position",
-              "is_featured", "show_on_home", "seo_title", "seo_description"]
+              "status", "development_status", "confidence", "origin_type", "commercial_status",
+              "repository_enabled", "repository_url", "integration_status", "ai_enabled",
+              "automation_enabled", "demo_available", "pricing_visibility", "product_version",
+              "release_date", "position", "is_featured", "show_on_home", "seo_title", "seo_description"]
     for field in fields:
         setattr(product, field, getattr(form, field).data)
     product.category_id = form.category_id.data or None
+    product.additional_categories = Category.query.filter(Category.id.in_(form.category_ids.data or [])).all()
+    product.platforms = [x.strip() for x in (form.platforms_text.data or "").replace("،", ",").split(",") if x.strip()]
     product.accent_color = form.accent_color.data if __import__("re").fullmatch(r"#[0-9a-fA-F]{6}", form.accent_color.data or "") else "#6d5dfc"
     product.use_cases = split_lines(form.use_cases_text.data)
     product.target_audience = split_lines(form.target_audience_text.data)
@@ -182,6 +192,18 @@ def apply_product_form(form, product):
     product.tags = tags
 
 
+def sync_primary_repository(product):
+    """Attach or update the optional primary repository without inventing one."""
+    if product.repository_name:
+        if not product.repository:
+            product.repository = ProductRepository(owner="Alirezahjf", name=product.repository_name)
+        product.repository.name = product.repository_name
+        product.repository.is_enabled = bool(product.repository_enabled)
+    elif product.repository:
+        product.repository.is_enabled = False
+        product.repository_enabled = False
+
+
 @bp.route("/products/new", methods=["GET", "POST"])
 @login_required
 def product_new():
@@ -196,8 +218,7 @@ def product_new():
             if form.cover.data:
                 product.cover_path = save_upload(form.cover.data, "image")["path"]
             db.session.add(product)
-            if product.repository_name:
-                product.repository = ProductRepository(owner="Alirezahjf", name=product.repository_name)
+            sync_primary_repository(product)
             log_activity("create", "Product", detail=product.name)
             db.session.commit()
             flash("محصول ذخیره شد. برای نمایش عمومی، وضعیت را «منتشرشده» قرار دهید.", "success")
@@ -226,10 +247,7 @@ def product_edit(product_id):
                 old = product.cover_path
                 product.cover_path = save_upload(form.cover.data, "image")["path"]
                 delete_upload(old)
-            if product.repository_name and not product.repository:
-                product.repository = ProductRepository(owner="Alirezahjf", name=product.repository_name)
-            elif product.repository:
-                product.repository.name = product.repository_name
+            sync_primary_repository(product)
             log_activity("update", "Product", product.id, product.name)
             db.session.commit()
             flash("تغییرات محصول ذخیره شد.", "success")
@@ -348,6 +366,87 @@ def feature_delete(feature_id):
     db.session.commit()
     flash("قابلیت حذف شد.", "success")
     return redirect(url_for("admin.features"))
+
+
+@bp.get("/integrations")
+@login_required
+def integrations():
+    connectors = PlatformConnector.query.order_by(PlatformConnector.product_id, PlatformConnector.position).all()
+    modules = ProductModule.query.order_by(ProductModule.product_id, ProductModule.position).all()
+    return render_template("admin/integrations.html", connectors=connectors, modules=modules, delete_form=DeleteForm())
+
+
+@bp.route("/connectors/new", methods=["GET", "POST"])
+@bp.route("/connectors/<int:connector_id>/edit", methods=["GET", "POST"])
+@login_required
+def connector_edit(connector_id=None):
+    item = PlatformConnector.query.get_or_404(connector_id) if connector_id else None
+    form = ConnectorForm(obj=item)
+    form.product_id.choices = products_choices()
+    if item and request.method == "GET":
+        form.supported_features_text.data = "\n".join(item.supported_features or [])
+        form.limitations_text.data = "\n".join(item.limitations or [])
+    elif request.args.get("product", type=int) and request.method == "GET":
+        form.product_id.data = request.args.get("product", type=int)
+    if form.validate_on_submit():
+        duplicate = PlatformConnector.query.filter_by(product_id=form.product_id.data, platform=form.platform.data.strip().lower()).first()
+        if duplicate and duplicate.id != connector_id:
+            form.platform.errors.append("این پلتفرم قبلاً برای محصول ثبت شده است.")
+        else:
+            connector = item or PlatformConnector()
+            form.populate_obj(connector)
+            connector.platform = form.platform.data.strip().lower()
+            connector.supported_features = split_lines(form.supported_features_text.data)
+            connector.limitations = split_lines(form.limitations_text.data)
+            if not item:
+                db.session.add(connector)
+            log_activity("update" if item else "create", "PlatformConnector", detail=f"{connector.product_id}/{connector.platform}")
+            db.session.commit()
+            flash("Connector و وضعیت واقعی اتصال ذخیره شد.", "success")
+            return redirect(url_for("admin.integrations"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش Connector" if item else "Connector جدید", back_url=url_for("admin.integrations"))
+
+
+@bp.post("/connectors/<int:connector_id>/delete")
+@login_required
+def connector_delete(connector_id):
+    item = PlatformConnector.query.get_or_404(connector_id)
+    db.session.delete(item)
+    log_activity("delete", "PlatformConnector", item.id, item.platform)
+    db.session.commit()
+    flash("Connector حذف شد.", "success")
+    return redirect(url_for("admin.integrations"))
+
+
+@bp.route("/modules/new", methods=["GET", "POST"])
+@bp.route("/modules/<int:module_id>/edit", methods=["GET", "POST"])
+@login_required
+def module_edit(module_id=None):
+    item = ProductModule.query.get_or_404(module_id) if module_id else None
+    form = ModuleForm(obj=item)
+    form.product_id.choices = products_choices()
+    if request.args.get("product", type=int) and request.method == "GET":
+        form.product_id.data = request.args.get("product", type=int)
+    if form.validate_on_submit():
+        module = item or ProductModule()
+        form.populate_obj(module)
+        if not item:
+            db.session.add(module)
+        log_activity("update" if item else "create", "ProductModule", detail=module.name)
+        db.session.commit()
+        flash("ماژول محصول ذخیره شد.", "success")
+        return redirect(url_for("admin.integrations"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش ماژول" if item else "ماژول جدید", back_url=url_for("admin.integrations"))
+
+
+@bp.post("/modules/<int:module_id>/delete")
+@login_required
+def module_delete(module_id):
+    item = ProductModule.query.get_or_404(module_id)
+    db.session.delete(item)
+    db.session.commit()
+    flash("ماژول حذف شد.", "success")
+    return redirect(url_for("admin.integrations"))
 
 
 @bp.get("/portfolios")

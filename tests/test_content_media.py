@@ -40,23 +40,25 @@ def test_portfolio_relations(admin_client, app):
 def test_upload_and_reject_disguised_image(admin_client, app, png_file):
     with app.app_context():
         product = Product.query.first()
+        initial_count = ProductMedia.query.count()
     data = {"owner_type": "product", "owner_id": str(product.id), "title": "تصویر آزمون", "media_type": "image", "position": 0, "is_published": "y", "file": (png_file, "screen.png")}
     response = admin_client.post("/admin/media/new", data=data, content_type="multipart/form-data", follow_redirects=True)
     assert "بارگذاری و متصل شد".encode() in response.data
     with app.app_context():
-        assert ProductMedia.query.count() == 1
-        media = ProductMedia.query.one()
+        assert ProductMedia.query.count() == initial_count + 1
+        media = ProductMedia.query.filter_by(title="تصویر آزمون").one()
         assert ".." not in media.file_path
         assert media.thumbnail_path.endswith(".webp")
     bad = {"owner_type": "product", "owner_id": str(product.id), "title": "فایل مخرب", "media_type": "image", "position": 0, "file": (io.BytesIO(b"not an image"), "fake.png")}
     admin_client.post("/admin/media/new", data=bad, content_type="multipart/form-data")
     with app.app_context():
-        assert ProductMedia.query.count() == 1
+        assert ProductMedia.query.count() == initial_count + 1
 
 
 def test_multiple_image_upload(admin_client, app, png_file):
     with app.app_context():
         product = Product.query.first()
+        initial_count = ProductMedia.query.count()
     second = io.BytesIO(png_file.read())
     png_file.seek(0)
     second.seek(0)
@@ -64,7 +66,7 @@ def test_multiple_image_upload(admin_client, app, png_file):
     response = admin_client.post("/admin/media/new", data=data, content_type="multipart/form-data", follow_redirects=True)
     assert response.status_code == 200
     with app.app_context():
-        assert ProductMedia.query.count() == 2
+        assert ProductMedia.query.count() == initial_count + 2
 
 
 def test_brand_settings_and_csv(admin_client, app):
