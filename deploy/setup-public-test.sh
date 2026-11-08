@@ -20,10 +20,10 @@ apt-get update
 apt-get install -y python3 python3-venv python3-pip git curl sqlite3 ufw
 
 if ! id "${APP_USER}" >/dev/null 2>&1; then
-  useradd --system --group --home-dir /srv/services --create-home --shell /usr/sbin/nologin "${APP_USER}"
+  useradd --system --user-group --home-dir /srv/services --create-home --shell /usr/sbin/nologin "${APP_USER}"
 fi
 mkdir -p "$(dirname "${APP_DIR}")"
-chown "${APP_USER}:${APP_USER}" "$(dirname "${APP_DIR}")"
+install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_DIR}"
 
 if [[ -d "${APP_DIR}/.git" ]]; then
   runuser -u "${APP_USER}" -- git -C "${APP_DIR}" fetch origin "${BRANCH}"
