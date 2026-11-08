@@ -9,7 +9,7 @@ from flask_login import current_user, login_required, login_user, logout_user
 from sqlalchemy import func, or_
 from app.extensions import db, limiter
 from app.models import (ActivityLog, AdminUser, Category, ContactMessage, FAQ, GitHubSyncLog,
-                        Lead, PageContent, Portfolio,
+                        AgentActivity, AgentApproval, AgentConnection, CustomPage, Lead, MenuItem, PageContent, Portfolio,
                         PortfolioMedia, PlatformConnector, Product, ProductFeature, ProductMedia, ProductModule, ProductPortfolio,
                         ProductRepository, RepositoryAnalysis, Service, SiteSetting, SocialLink, Tag, WorkflowStep)
 from app.github_sync.service import sync_repository
@@ -17,8 +17,10 @@ from app.services.activity import log_activity
 from app.services.media_service import MediaValidationError, delete_upload, save_upload
 from app.services.utils import client_ip_hash, slugify, split_lines
 from .forms import (CategoryForm, ConnectorForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LoginForm,
-                    MediaForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, PortfolioMediaEditForm, ProductForm, ProductMediaEditForm,
+                    AgentConnectionForm, CustomPageForm, MediaForm, MenuItemForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, PortfolioMediaEditForm, ProductForm, ProductMediaEditForm,
                     ServiceForm, SettingsForm, SocialForm, WorkflowForm)
+from app.services.page_service import PageValidationError, apply_page_data, page_dict, set_page_status
+from app.services.agent_service import AgentToolError, TOOLS, apply_menu_data, execute_tool, issue_token
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 ALLOWED_HTML_TAGS = ["p", "br", "strong", "b", "em", "i", "ul", "ol", "li", "h2", "h3", "h4", "blockquote", "a", "code", "pre"]
@@ -935,3 +937,232 @@ def analysis_detail(analysis_id):
 def activity():
     rows = ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(300).all()
     return render_template("admin/activity.html", activities=rows)
+
+# ----- Custom pages and navigation -----
+@bp.get("/pages")
+@login_required
+def custom_pages():
+    rows = CustomPage.query.order_by(CustomPage.updated_at.desc()).all()
+    return render_template("admin/pages.html", pages=rows, delete_form=DeleteForm())
+
+
+@bp.route("/pages/new", methods=["GET", "POST"])
+@bp.route("/pages/<int:page_id>/edit", methods=["GET", "POST"])
+@login_required
+def custom_page_edit(page_id=None):
+    item = CustomPage.query.get_or_404(page_id) if page_id else None
+    form = CustomPageForm(obj=item)
+    if form.validate_on_submit():
+        page = item or CustomPage()
+        try:
+            apply_page_data(page, form.data)
+            if not item:
+                db.session.add(page)
+            log_activity("update" if item else "create", "CustomPage", page.id, page.title)
+            db.session.commit()
+            flash("صفحه ذخیره شد. وضعیت انتشار و آدرس عمومی از فهرست صفحات قابل مدیریت است.", "success")
+            return redirect(url_for("admin.custom_page_edit", page_id=page.id))
+        except PageValidationError as exc:
+            db.session.rollback()
+            form.slug.errors.append(str(exc))
+    return render_template("admin/page_form.html", form=form, page=item, title="ویرایش صفحه" if item else "صفحه اختصاصی جدید")
+
+
+@bp.get("/pages/<int:page_id>/preview")
+@login_required
+def custom_page_preview(page_id):
+    page = CustomPage.query.get_or_404(page_id)
+    return render_template("public/custom_page.html", page=page, admin_preview=True)
+
+
+@bp.post("/pages/<int:page_id>/status")
+@login_required
+def custom_page_status(page_id):
+    page = CustomPage.query.get_or_404(page_id)
+    try:
+        set_page_status(page, request.form.get("status", ""))
+        log_activity("status", "CustomPage", page.id, page.status)
+        db.session.commit()
+        flash("وضعیت انتشار صفحه تغییر کرد.", "success")
+    except PageValidationError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("admin.custom_pages"))
+
+
+@bp.post("/pages/<int:page_id>/delete")
+@login_required
+def custom_page_delete(page_id):
+    page = CustomPage.query.get_or_404(page_id)
+    title = page.title
+    db.session.delete(page)
+    log_activity("delete", "CustomPage", page_id, title)
+    db.session.commit()
+    flash("صفحه و Redirectهای مرتبط حذف شدند.", "success")
+    return redirect(url_for("admin.custom_pages"))
+
+
+@bp.get("/menus")
+@login_required
+def menus():
+    return render_template("admin/menus.html", items=MenuItem.query.order_by(MenuItem.location, MenuItem.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/menus/new", methods=["GET", "POST"])
+@bp.route("/menus/<int:menu_id>/edit", methods=["GET", "POST"])
+@login_required
+def menu_edit(menu_id=None):
+    item = MenuItem.query.get_or_404(menu_id) if menu_id else None
+    form = MenuItemForm(obj=item)
+    form.page_id.choices = [(0, "بدون صفحه اختصاصی")] + [(p.id, p.title) for p in CustomPage.query.filter_by(status="published").order_by(CustomPage.title).all()]
+    form.parent_id.choices = [(0, "بدون والد")] + [(m.id, m.title) for m in MenuItem.query.filter(MenuItem.id != (menu_id or 0)).order_by(MenuItem.title).all()]
+    if form.validate_on_submit():
+        if not (form.page_id.data or form.internal_url.data or form.external_url.data):
+            form.internal_url.errors.append("یک صفحه، لینک داخلی یا لینک خارجی انتخاب کنید.")
+            return render_template("admin/simple_form.html", form=form, title="ویرایش منو" if item else "آیتم منوی جدید", back_url=url_for("admin.menus"))
+        menu = item or MenuItem()
+        data = form.data.copy()
+        data["page_id"] = form.page_id.data or None
+        data["parent_id"] = form.parent_id.data or None
+        try:
+            apply_menu_data(menu, data)
+            if not item:
+                db.session.add(menu)
+            log_activity("update" if item else "create", "MenuItem", menu.id, menu.title)
+            db.session.commit()
+            flash("آیتم منو ذخیره شد.", "success")
+            return redirect(url_for("admin.menus"))
+        except AgentToolError as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+    return render_template("admin/simple_form.html", form=form, title="ویرایش منو" if item else "آیتم منوی جدید", back_url=url_for("admin.menus"))
+
+
+@bp.post("/menus/<int:menu_id>/delete")
+@login_required
+def menu_delete(menu_id):
+    item = MenuItem.query.get_or_404(menu_id)
+    db.session.delete(item)
+    log_activity("delete", "MenuItem", menu_id, item.title)
+    db.session.commit()
+    flash("آیتم و زیرمنوهای آن حذف شد.", "success")
+    return redirect(url_for("admin.menus"))
+
+
+# ----- AI agents, approvals and audit -----
+@bp.get("/agents")
+@login_required
+def agents():
+    rows = AgentConnection.query.order_by(AgentConnection.created_at.desc()).all()
+    pending = AgentApproval.query.filter_by(status="pending").order_by(AgentApproval.created_at).all()
+    return render_template("admin/agents.html", agents=rows, pending=pending, tools=TOOLS, delete_form=DeleteForm(), new_token=None)
+
+
+@bp.route("/agents/new", methods=["GET", "POST"])
+@bp.route("/agents/<int:agent_id>/edit", methods=["GET", "POST"])
+@login_required
+def agent_edit(agent_id=None):
+    item = AgentConnection.query.get_or_404(agent_id) if agent_id else None
+    form = AgentConnectionForm(obj=item)
+    new_token = None
+    if form.validate_on_submit():
+        agent = item or AgentConnection()
+        duplicate = AgentConnection.query.filter(AgentConnection.name == form.name.data.strip(), AgentConnection.id != (agent_id or 0)).first()
+        if duplicate:
+            form.name.errors.append("این نام قبلاً استفاده شده است.")
+        else:
+            agent.name = form.name.data.strip()
+            agent.description = form.description.data
+            agent.permissions = form.permissions.data
+            agent.expires_at = datetime.combine(form.expires_at.data, datetime.min.time()) if form.expires_at.data else None
+            agent.rate_limit_per_minute = form.rate_limit_per_minute.data
+            agent.is_enabled = form.is_enabled.data
+            agent.require_approval_for_sensitive = form.require_approval_for_sensitive.data
+            if not item:
+                new_token = issue_token(agent)
+                db.session.add(agent)
+            log_activity("update" if item else "create", "AgentConnection", agent.id, agent.name)
+            db.session.commit()
+            if new_token:
+                flash("کلید فقط در همین پاسخ نمایش داده می‌شود؛ آن را در محل امن Client ذخیره کنید.", "success")
+                return render_template("admin/agents.html", agents=AgentConnection.query.all(), pending=AgentApproval.query.filter_by(status="pending").all(), tools=TOOLS, delete_form=DeleteForm(), new_token=new_token)
+            flash("تنظیمات و مجوزهای ایجنت ذخیره شد.", "success")
+            return redirect(url_for("admin.agents"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش ایجنت" if item else "اتصال ایجنت جدید", back_url=url_for("admin.agents"))
+
+
+@bp.post("/agents/<int:agent_id>/rotate")
+@login_required
+def agent_rotate(agent_id):
+    agent = AgentConnection.query.get_or_404(agent_id)
+    token = issue_token(agent)
+    agent.revoked_at = None
+    log_activity("rotate_token", "AgentConnection", agent.id, agent.name)
+    db.session.commit()
+    flash("کلید جدید صادر و کلید قبلی بلافاصله باطل شد. کلید جدید فقط همین یک بار نمایش داده می‌شود.", "success")
+    return render_template("admin/agents.html", agents=AgentConnection.query.all(), pending=AgentApproval.query.filter_by(status="pending").all(), tools=TOOLS, delete_form=DeleteForm(), new_token=token)
+
+
+@bp.post("/agents/<int:agent_id>/revoke")
+@login_required
+def agent_revoke(agent_id):
+    from datetime import datetime as dt
+    agent = AgentConnection.query.get_or_404(agent_id)
+    agent.revoked_at = dt.utcnow()
+    agent.is_enabled = False
+    log_activity("revoke", "AgentConnection", agent.id, agent.name)
+    db.session.commit()
+    flash("دسترسی ایجنت بلافاصله لغو شد.", "success")
+    return redirect(url_for("admin.agents"))
+
+
+@bp.post("/agents/<int:agent_id>/delete")
+@login_required
+def agent_delete(agent_id):
+    agent = AgentConnection.query.get_or_404(agent_id)
+    name = agent.name
+    db.session.delete(agent)
+    log_activity("delete", "AgentConnection", agent_id, name)
+    db.session.commit()
+    flash("اتصال، اعتبارنامه و سابقه اختصاصی آن حذف شد.", "success")
+    return redirect(url_for("admin.agents"))
+
+
+@bp.post("/approvals/<int:approval_id>/<decision>")
+@login_required
+def approval_review(approval_id, decision):
+    approval = AgentApproval.query.get_or_404(approval_id)
+    if approval.status != "pending":
+        flash("این درخواست قبلاً بررسی شده است.", "error")
+        return redirect(url_for("admin.agents"))
+    if decision not in ("approve", "reject"):
+        abort(404)
+    if decision == "reject":
+        approval.status = "rejected"
+    else:
+        try:
+            result = execute_tool(approval.agent, approval.tool_name, approval.payload, approved_by=current_user.id, skip_approval=True)
+            approval.status = "approved"
+            approval.result = result
+            flash("عملیات تأیید و از مسیر سرویس امن اجرا شد.", "success")
+        except AgentToolError as exc:
+            approval.status = "rejected"
+            approval.result = {"error": str(exc)}
+            flash(f"اجرای عملیات ناموفق بود: {exc}", "error")
+    approval.reviewed_by = current_user.id
+    approval.reviewed_at = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("admin.agents"))
+
+
+@bp.get("/agent-activity")
+@login_required
+def agent_activity():
+    query = AgentActivity.query
+    agent_id = request.args.get("agent", type=int)
+    status = request.args.get("status", "")
+    operation = request.args.get("operation", "")
+    if agent_id: query = query.filter_by(agent_id=agent_id)
+    if status: query = query.filter_by(status=status)
+    if operation: query = query.filter_by(operation=operation)
+    rows = query.order_by(AgentActivity.id.desc()).limit(300).all()
+    return render_template("admin/agent_activity.html", activities=rows, agents=AgentConnection.query.all())

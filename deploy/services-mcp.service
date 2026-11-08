@@ -1,0 +1,22 @@
+[Unit]
+Description=HJF Services official MCP Streamable HTTP server
+After=network.target services-website.service
+
+[Service]
+Type=simple
+User=services
+Group=services
+WorkingDirectory=/srv/services/app
+EnvironmentFile=/srv/services/app/.env
+Environment=PATH=/srv/services/app/.venv/bin
+Environment=MCP_PORT=9901
+ExecStart=/srv/services/app/.venv/bin/uvicorn mcp_server:asgi_app --host 0.0.0.0 --port 9901 --proxy-headers
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/srv/services/app/instance
+
+[Install]
+WantedBy=multi-user.target

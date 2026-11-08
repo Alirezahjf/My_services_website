@@ -5,6 +5,11 @@
       if (!window.confirm(form.dataset.confirm || 'این عملیات انجام شود؟')) event.preventDefault();
     });
   });
+  document.querySelectorAll('button[data-confirm]').forEach(button => {
+    button.addEventListener('click', event => {
+      if (!window.confirm(button.dataset.confirm || 'این عملیات انجام شود؟')) event.preventDefault();
+    });
+  });
   const menu = document.querySelector('[data-admin-menu]');
   const sidebar = document.querySelector('[data-admin-sidebar]');
   menu?.addEventListener('click', () => sidebar?.classList.toggle('is-open'));

@@ -19,6 +19,28 @@ services:
       timeout: 5s
       retries: 3
 
+  mcp:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////data/services.sqlite3
+      HOST: 0.0.0.0
+      MCP_PORT: 9901
+    command: uvicorn mcp_server:asgi_app --host 0.0.0.0 --port 9901
+    ports:
+      - "9901:9901"
+    volumes:
+      - app-data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client; c=http.client.HTTPConnection('127.0.0.1',9901); c.request('GET','/mcp'); r=c.getresponse(); assert r.status == 401"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 volumes:
   app-data:
   uploads:

@@ -64,6 +64,7 @@ COOKIE_SECURE=true
 DATABASE_URL=sqlite:////srv/services/app/instance/services.sqlite3
 RATELIMIT_STORAGE_URI=memory://
 PORT=9900
+MCP_PORT=9901
 ```
 
 برای چند Worker عملیاتی، Redis و PostgreSQL توصیه می‌شود؛ نمونه DSN در README است. با SQLite می‌توانید ابتدا از دو Worker شروع کنید و Backups منظم بگیرید. سپس دسترسی فایل رازها را محدود کنید:
@@ -131,6 +132,22 @@ sudo systemctl restart services-website
 sudo journalctl -u services-website -n 100 --no-pager
 ```
 
+### سرویس مستقل MCP
+
+MCP با Uvicorn و SDK رسمی روی پورت 9901 اجرا می‌شود و دیتابیس و Secret وب‌سایت را از همان Environment می‌خواند:
+
+```bash
+sudo cp deploy/services-mcp.service /etc/systemd/system/services-mcp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now services-mcp
+sudo systemctl restart services-website services-mcp
+sudo systemctl is-active services-website services-mcp
+curl -i http://127.0.0.1:9901/mcp
+# پاسخ 401 بدون Bearer Token نشانه اجرای درست محافظت است.
+```
+
+آدرس آزمایشی `http://PUBLIC_SERVER_IP:9901/mcp` است. برای اتصال از بیرون در حالت آزمایش `sudo ufw allow 9901/tcp` را اجرا کنید. Token را در `/admin/agents` بسازید؛ آدرس و نمونه Client در `docs/AI_AGENTS.md` آمده است. هر بار تغییر کد یا Migration، هر دو سرویس را Restart کنید.
+
 ## ۶. Nginx به‌عنوان Reverse Proxy
 
 ```bash
@@ -150,6 +167,23 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_redirect off;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name mcp.services.example.com;
+    client_max_body_size 1m;
+
+    location /mcp {
+        proxy_pass http://127.0.0.1:9901;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 75s;
+        proxy_buffering off;
     }
 }
 NGINX
@@ -173,7 +207,7 @@ sudo ufw enable
 ## ۷. HTTPS با Certbot
 
 ```bash
-sudo certbot --nginx -d services.example.com --redirect --hsts --staple-ocsp
+sudo certbot --nginx -d services.example.com -d mcp.services.example.com --redirect --hsts --staple-ocsp
 sudo certbot renew --dry-run
 sudo systemctl status certbot.timer --no-pager
 curl -I https://services.example.com/
@@ -188,7 +222,7 @@ sudo systemctl restart services-website
 ## ۸. بررسی نهایی و پشتیبان
 
 ```bash
-sudo systemctl is-active services-website nginx
+sudo systemctl is-active services-website services-mcp nginx
 curl -fsS https://services.example.com/ >/dev/null
 curl -fsS https://services.example.com/admin/login >/dev/null
 cd /srv/services/app

@@ -27,7 +27,7 @@ def create_app(test_config=None):
     csrf.init_app(app)
     limiter.init_app(app)
 
-    from .models import AdminUser, SiteSetting, SocialLink
+    from .models import AdminUser, CustomPage, MenuItem, SiteSetting, SocialLink
     @login_manager.user_loader
     def load_user(user_id):
         return db.session.get(AdminUser, int(user_id))
@@ -36,17 +36,29 @@ def create_app(test_config=None):
     from .admin.routes import bp as admin_bp
     app.register_blueprint(public_bp)
     app.register_blueprint(admin_bp)
+    from .agent_api import bp as agent_api_bp
+    app.register_blueprint(agent_api_bp)
+    csrf.exempt(agent_api_bp)
 
     @app.context_processor
     def global_content():
         settings = {row.key: row.value for row in SiteSetting.query.all()}
         socials = SocialLink.query.filter_by(is_published=True).order_by(SocialLink.position).all()
-        return {"site": settings, "socials": socials, "setting": lambda key, default="": settings.get(key) or default}
+        pages = CustomPage.query.filter_by(status="published", menu_links_enabled=True).order_by(CustomPage.menu_order, CustomPage.title).all()
+        custom_items = MenuItem.query.filter_by(is_enabled=True, parent_id=None).order_by(MenuItem.location, MenuItem.position).all()
+        return {"site": settings, "socials": socials, "setting": lambda key, default="": settings.get(key) or default,
+                "page_menus": {location: [p for p in pages if getattr(p, "show_in_" + location)] for location in ("main", "hamburger", "footer")},
+                "custom_menu_items": custom_items}
 
     @app.template_filter("fa_num")
     def fa_num(value):
         from .services.utils import persian_digits
         return persian_digits(value)
+
+    @app.template_filter("fa_date")
+    def fa_date(value):
+        from .services.utils import persian_digits
+        return persian_digits(value.strftime("%Y/%m/%d %H:%M")) if value else "—"
 
     @app.template_filter("safe_html")
     def safe_html(value):

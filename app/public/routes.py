@@ -2,9 +2,10 @@
 from pathlib import Path
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
 from sqlalchemy import or_
+from werkzeug.exceptions import HTTPException
 from sqlalchemy.orm import joinedload, selectinload
 from app.extensions import db, limiter
-from app.models import Category, ContactMessage, FAQ, Lead, PageContent, Portfolio, Product, ProductPortfolio, Service, SiteSetting, SocialLink, WorkflowStep
+from app.models import Category, ContactMessage, CustomPage, FAQ, Lead, PageContent, PageRedirect, Portfolio, Product, ProductPortfolio, Service, SiteSetting, SocialLink, WorkflowStep
 from app.services.media_service import MediaValidationError, save_upload
 from app.services.utils import client_ip_hash
 from .forms import ConsultationForm, ContactForm, CustomSolutionForm
@@ -35,7 +36,8 @@ def home():
     steps = WorkflowStep.query.filter_by(is_published=True).order_by(WorkflowStep.position).all()
     return render_template("public/home.html", categories=categories, products=featured,
                            portfolios=portfolios, faqs=faqs, steps=steps,
-                           sections=page_sections("home"))
+                           repository_count=Product.query.filter(Product.repository_name.is_not(None)).count(),
+                           category_count=len(categories), sections=page_sections("home"))
 
 
 @bp.get("/products")
@@ -202,6 +204,7 @@ def sitemap():
              url_for("public.about", _external=True), url_for("public.contact", _external=True)]
     pages += [url_for("public.product_detail", slug=p.slug, _external=True) for p in published_products().all()]
     pages += [url_for("public.portfolio_detail", slug=p.slug, _external=True) for p in Portfolio.query.filter_by(is_published=True).all()]
+    pages += [url_for("public.custom_page", page_path=p.slug, _external=True) for p in CustomPage.query.filter_by(status="published").all()]
     xml = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     xml += [f"<url><loc>{__import__('html').escape(page)}</loc></url>" for page in pages]
     xml.append("</urlset>")
@@ -212,3 +215,24 @@ def sitemap():
 def robots():
     sitemap_url = url_for("public.sitemap", _external=True)
     return f"User-agent: *\nAllow: /\nDisallow: /admin/\nSitemap: {sitemap_url}\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+@bp.get("/<path:page_path>")
+def custom_page(page_path):
+    """Resolve published database pages after all explicit application routes."""
+    from app.services.page_service import PageValidationError, normalize_page_path
+    try:
+        path = normalize_page_path(page_path)
+        page = CustomPage.query.filter_by(slug=path, status="published").first()
+        if page:
+            return render_template("public/custom_page.html", page=page, admin_preview=False)
+        old = PageRedirect.query.filter_by(old_path=path).first()
+        if old and old.page and old.page.status == "published":
+            return redirect(url_for("public.custom_page", page_path=old.page.slug), code=301)
+        abort(404)
+    except PageValidationError:
+        abort(404)
+    except HTTPException:
+        raise
+    except Exception:
+        current_app.logger.exception("Custom page routing failed for path %s", page_path[:200])
+        abort(500)

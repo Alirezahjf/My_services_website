@@ -22,8 +22,10 @@
   <link rel="preload" href="{{ url_for('static',filename='fonts/Vazirmatn-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static',filename='css/main.css') }}">
   {% block head %}{% endblock %}
+  <noscript><style>.reveal,[data-page-enter]>*,.hero-visual[data-page-enter]{opacity:1;transform:none}</style></noscript>
 </head>
 <body class="{% block body_class %}{% endblock %}">
+  <div class="scroll-progress" data-scroll-progress aria-hidden="true"></div>
   <a class="skip-link" href="#main-content">رفتن به محتوای اصلی</a>
   <header class="site-header" data-header>
     <div class="container header-inner">
@@ -40,11 +42,14 @@
         <a href="{{ url_for('public.portfolio') }}" class="{{ 'active' if request.endpoint in ['public.portfolio','public.portfolio_detail'] }}">نمونه‌کارها</a>
         <a href="{{ url_for('public.about') }}" class="{{ 'active' if request.endpoint=='public.about' }}">درباره ما</a>
         <a href="{{ url_for('public.contact') }}" class="{{ 'active' if request.endpoint=='public.contact' }}">تماس</a>
+        {% for page in page_menus.main %}<a class="desktop-only" href="{{ url_for('public.custom_page',page_path=page.slug) }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if page.open_in_new_tab }}>{{ page.menu_title or page.title }}</a>{% endfor %}
+        {% for page in page_menus.hamburger %}<a class="mobile-only" href="{{ url_for('public.custom_page',page_path=page.slug) }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if page.open_in_new_tab }}>{{ page.menu_title or page.title }}</a>{% endfor %}
+        {% for item in custom_menu_items if item.location in ['main','hamburger'] and item.is_visible %}<a class="{{ 'desktop-only' if item.location=='main' else 'mobile-only' }}" href="{{ item.href }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if item.open_in_new_tab }}>{{ item.title }}</a>{% if item.children %}<details class="nav-submenu {{ 'desktop-only' if item.location=='main' else 'mobile-only' }}"><summary>زیرمنوی {{ item.title }}</summary>{% for child in item.children if child.is_visible %}<a href="{{ child.href }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if child.open_in_new_tab }}>{{ child.title }}</a>{% endfor %}</details>{% endif %}{% endfor %}
       </nav>
       <a class="button button-primary header-cta" href="{{ url_for('public.consultation') }}">درخواست مشاوره <span aria-hidden="true">↙</span></a>
     </div>
   </header>
-  {% if admin_preview is defined and admin_preview %}<div class="preview-bar">پیش‌نمایش مدیریتی — این صفحه با وضعیت «{{ product.status }}» عمومی نیست. <a href="{{ url_for('admin.product_edit',product_id=product.id) }}">بازگشت به ویرایش</a></div>{% endif %}
+  {% if admin_preview is defined and admin_preview and product is defined %}<div class="preview-bar">پیش‌نمایش مدیریتی — این صفحه با وضعیت «{{ product.status }}» عمومی نیست. <a href="{{ url_for('admin.product_edit',product_id=product.id) }}">بازگشت به ویرایش</a></div>{% endif %}
   <div class="flash-wrap container" aria-live="polite">
     {% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="alert alert-{{ category }}"><span>{{ message }}</span><button type="button" aria-label="بستن" data-dismiss>×</button></div>{% endfor %}{% endwith %}
   </div>
@@ -56,7 +61,7 @@
         <p>{{ setting('brand_description') }}</p>
         {% if socials %}<div class="social-links">{% for social in socials %}<a href="{{ social.url }}" rel="noopener noreferrer" target="_blank">{{ social.title }}</a>{% endfor %}</div>{% endif %}
       </div>
-      <div><h3>دسترسی سریع</h3><a href="{{ url_for('public.products') }}">کاتالوگ محصولات</a><a href="{{ url_for('public.services') }}">خدمات نرم‌افزاری</a><a href="{{ url_for('public.portfolio') }}">نمونه‌کارها</a><a href="{{ url_for('public.custom_solution') }}">سفارش راهکار اختصاصی</a></div>
+      <div><h3>دسترسی سریع</h3><a href="{{ url_for('public.products') }}">کاتالوگ محصولات</a><a href="{{ url_for('public.services') }}">خدمات نرم‌افزاری</a><a href="{{ url_for('public.portfolio') }}">نمونه‌کارها</a><a href="{{ url_for('public.custom_solution') }}">سفارش راهکار اختصاصی</a>{% for page in page_menus.footer %}<a href="{{ url_for('public.custom_page',page_path=page.slug) }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if page.open_in_new_tab }}>{{ page.menu_title or page.title }}</a>{% endfor %}{% for item in custom_menu_items if item.location=='footer' and item.is_visible %}<a href="{{ item.href }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if item.open_in_new_tab }}>{{ item.title }}</a>{% endfor %}</div>
       <div><h3>ارتباط و اطلاعات</h3>{% if setting('email') %}<a href="mailto:{{ setting('email') }}" dir="ltr">{{ setting('email') }}</a>{% endif %}{% if setting('phone') %}<a href="tel:{{ setting('phone') }}">{{ setting('phone') }}</a>{% endif %}<a href="{{ url_for('public.contact') }}">فرم تماس</a><a href="{{ url_for('public.consultation') }}">درخواست مشاوره</a></div>
       <div><h3>شفافیت و اعتماد</h3><p class="footer-note">قابلیت‌ها بر اساس کد واقعی بررسی می‌شوند؛ پیش‌نیازها و محدودیت‌ها پنهان نیستند.</p><a href="{{ url_for('public.legal',page_key='privacy') }}">حریم خصوصی</a><a href="{{ url_for('public.legal',page_key='terms') }}">شرایط استفاده</a></div>
     </div>

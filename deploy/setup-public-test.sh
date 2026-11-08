@@ -14,6 +14,7 @@ APP_DIR="/opt/hjf-services"
 APP_USER="services"
 ADMIN_USERNAME="admin"
 PORT="9900"
+MCP_PORT="9901"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -54,6 +55,7 @@ COOKIE_SECURE=false
 DATABASE_URL=sqlite:///${APP_DIR}/instance/services.sqlite3
 RATELIMIT_STORAGE_URI=memory://
 PORT=${PORT}
+MCP_PORT=${MCP_PORT}
 ENV
 fi
 chown -R "${APP_USER}:${APP_USER}" .env instance backups
@@ -96,27 +98,56 @@ ReadWritePaths=${APP_DIR}/instance ${APP_DIR}/backups
 WantedBy=multi-user.target
 UNIT
 
+cat > /etc/systemd/system/hjf-services-mcp.service <<UNIT
+[Unit]
+Description=HJF Services official MCP Streamable HTTP server
+After=network.target hjf-services.service
+
+[Service]
+Type=simple
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${APP_DIR}/.env
+Environment=PATH=${APP_DIR}/.venv/bin
+Environment=MCP_PORT=${MCP_PORT}
+ExecStart=${APP_DIR}/.venv/bin/uvicorn mcp_server:asgi_app --host 0.0.0.0 --port ${MCP_PORT} --proxy-headers
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=${APP_DIR}/instance
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 systemctl daemon-reload
-systemctl enable hjf-services
-systemctl restart hjf-services
+systemctl enable hjf-services hjf-services-mcp
+systemctl restart hjf-services hjf-services-mcp
 ufw allow OpenSSH >/dev/null
 ufw allow "${PORT}/tcp" >/dev/null
+ufw allow "${MCP_PORT}/tcp" >/dev/null
 ufw --force enable >/dev/null
 
 sleep 3
 systemctl is-active --quiet hjf-services
 curl -fsS --max-time 10 "http://127.0.0.1:${PORT}/" >/dev/null
+MCP_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:${MCP_PORT}/mcp")"
+[[ "${MCP_STATUS}" == "401" ]]
 PUBLIC_IP="$(curl -4 -fsS --max-time 8 https://api.ipify.org || hostname -I | cut -d' ' -f1)"
 
 printf '\nInstallation completed successfully.\n'
 printf 'Website: http://%s:%s/\n' "${PUBLIC_IP}" "${PORT}"
 printf 'Admin:   http://%s:%s/admin/login\n' "${PUBLIC_IP}" "${PORT}"
+printf 'MCP:     http://%s:%s/mcp (Bearer token required)\n' "${PUBLIC_IP}" "${MCP_PORT}"
 if [[ -f ${CREDENTIAL_FILE} ]]; then
   cat "${CREDENTIAL_FILE}"
   printf 'Credentials are also stored in %s (root-only).\n' "${CREDENTIAL_FILE}"
 else
   printf 'Existing administrator credentials were left unchanged.\n'
 fi
-printf 'Service status: systemctl status hjf-services\n'
-printf 'Logs: journalctl -u hjf-services -f\n'
+printf 'Service status: systemctl status hjf-services hjf-services-mcp\n'
+printf 'Logs: journalctl -u hjf-services -u hjf-services-mcp -f\n'
 printf 'This is an HTTP test setup. Configure HTTPS before production use.\n'

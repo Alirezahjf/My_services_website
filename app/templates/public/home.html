@@ -5,15 +5,15 @@
 <section class="hero">
   <div class="hero-noise" aria-hidden="true"></div><div class="hero-glow hero-glow-one" aria-hidden="true"></div><div class="hero-glow hero-glow-two" aria-hidden="true"></div>
   <div class="container hero-grid">
-    <div class="hero-copy">
+    <div class="hero-copy" data-page-enter>
       <div class="hero-kicker"><span class="pulse-dot"></span> راهکارهای نرم‌افزاری مبتنی بر پروژه‌های واقعی</div>
       <h1>{{ hero.title if hero else 'نرم‌افزار که کار را واقعاً ساده‌تر می‌کند' }}</h1>
       <p class="hero-lead">{{ hero.subtitle if hero else '' }}</p>
       <div class="hero-description">{{ hero.body|safe_html if hero else '' }}</div>
       <div class="hero-actions"><a href="{{ url_for('public.products') }}" class="button button-accent">مشاهده محصولات <span>↙</span></a><a href="{{ url_for('public.consultation') }}" class="button button-ghost">درخواست مشاوره <span>←</span></a></div>
-      <div class="hero-proof"><div><strong>۱۶</strong><span>مخزن واقعی بررسی‌شده</span></div><i></i><div><strong>۶</strong><span>حوزه تخصصی نرم‌افزار</span></div><i></i><div><strong>۱۰۰٪</strong><span>شفافیت در پیش‌نیازها</span></div></div>
+      <div class="hero-proof"><div><strong data-count="{{ repository_count }}">{{ repository_count|fa_num }}</strong><span>مخزن واقعی بررسی‌شده</span></div><i></i><div><strong data-count="{{ category_count }}">{{ category_count|fa_num }}</strong><span>حوزه تخصصی نرم‌افزار</span></div><i></i><div><strong>۱۰۰٪</strong><span>شفافیت در پیش‌نیازها</span></div></div>
     </div>
-    <div class="hero-visual" aria-label="نمای مفهومی چرخه توسعه راهکار">
+    <div class="hero-visual" data-page-enter data-parallax="0.035" aria-label="نمای مفهومی چرخه توسعه راهکار">
       <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
       <div class="system-card">
         <div class="system-card-header"><div class="window-dots"><i></i><i></i><i></i></div><span>WORKFLOW / OVERVIEW</span><span class="live-label"><b></b> ONLINE</span></div>

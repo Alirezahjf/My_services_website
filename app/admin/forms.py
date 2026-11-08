@@ -3,6 +3,7 @@ from flask_wtf.file import FileAllowed, FileField, MultipleFileField
 from wtforms import BooleanField, DateField, IntegerField, PasswordField, SelectField, SelectMultipleField, StringField, TextAreaField
 from wtforms.validators import DataRequired, EqualTo, Length, NumberRange, Optional, URL, ValidationError
 from app.models import Product
+from app.services.agent_service import PERMISSIONS
 
 IMAGE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "svg"]
 
@@ -218,3 +219,59 @@ class LeadUpdateForm(FlaskForm):
 
 class DeleteForm(FlaskForm):
     pass
+
+class CustomPageForm(FlaskForm):
+    slug = StringField("آدرس اختصاصی", validators=[DataRequired(), Length(max=500)], description="مثلاً company/ai-consulting یا مشاوره-هوشمند")
+    title = StringField("عنوان صفحه", validators=[DataRequired(), Length(max=200)])
+    heading = StringField("عنوان اصلی", validators=[DataRequired(), Length(max=240)])
+    subtitle = StringField("زیرعنوان", validators=[Optional(), Length(max=500)])
+    summary = TextAreaField("خلاصه", validators=[Optional(), Length(max=3000)])
+    html_content = TextAreaField("HTML امن صفحه", validators=[Optional(), Length(max=100000)])
+    status = SelectField("وضعیت انتشار", choices=[("draft", "پیش‌نویس"), ("published", "منتشرشده"), ("unpublished", "از انتشار خارج"), ("archived", "بایگانی")], default="draft")
+    seo_title = StringField("عنوان SEO", validators=[Optional(), Length(max=180)])
+    seo_description = TextAreaField("توضیح SEO", validators=[Optional(), Length(max=320)])
+    show_in_main = BooleanField("نمایش در منوی اصلی")
+    show_in_hamburger = BooleanField("نمایش در منوی همبرگری")
+    show_in_footer = BooleanField("نمایش در فوتر")
+    menu_title = StringField("عنوان نمایشی در منو", validators=[Optional(), Length(max=120)])
+    menu_order = IntegerField("ترتیب منو", default=0, validators=[NumberRange(min=0, max=10000)])
+    menu_links_enabled = BooleanField("لینک‌های منو فعال باشند", default=True)
+    open_in_new_tab = BooleanField("باز شدن در تب جدید")
+
+
+from urllib.parse import urlparse
+
+
+class MenuItemForm(FlaskForm):
+    title = StringField("عنوان لینک", validators=[DataRequired(), Length(max=120)])
+    location = SelectField("محل نمایش", choices=[("main", "منوی اصلی"), ("hamburger", "منوی همبرگری"), ("footer", "فوتر")])
+    page_id = SelectField("صفحه اختصاصی منتشرشده", coerce=int, validators=[Optional()])
+    internal_url = StringField("یا لینک داخلی (/products)", validators=[Optional(), Length(max=500)])
+    external_url = StringField("یا لینک خارجی", validators=[Optional(), URL(), Length(max=500)])
+    parent_id = SelectField("زیرمنوی", coerce=int, validators=[Optional()])
+    position = IntegerField("ترتیب", default=0, validators=[NumberRange(min=0, max=10000)])
+    is_enabled = BooleanField("فعال", default=True)
+    open_in_new_tab = BooleanField("باز شدن در تب جدید")
+
+    def validate(self, **kwargs):
+        if not super().validate(**kwargs):
+            return False
+        if self.internal_url.data and (not self.internal_url.data.startswith("/") or self.internal_url.data.startswith("//")):
+            self.internal_url.errors.append("لینک داخلی باید با یک / شروع شود.")
+            return False
+        if self.external_url.data:
+            scheme = urlparse(self.external_url.data).scheme.lower()
+            if scheme not in {"https", "http", "mailto", "tel"}:
+                self.external_url.errors.append("فقط لینک HTTPS/HTTP، ایمیل یا تلفن مجاز است.")
+                return False
+        return True
+
+
+class AgentConnectionForm(FlaskForm):
+    name = StringField("نام ایجنت", validators=[DataRequired(), Length(max=120)])
+    description = TextAreaField("نوع استفاده", validators=[Optional(), Length(max=2000)])
+    permissions = SelectMultipleField("مجوزهای مستقل", choices=[(key, f"{label} — {key}") for key, label in PERMISSIONS.items()], validators=[DataRequired()])
+    expires_at = DateField("تاریخ انقضا (اختیاری)", validators=[Optional()])
+    rate_limit_per_minute = IntegerField("حداکثر درخواست در دقیقه", default=60, validators=[NumberRange(min=1, max=1000)])
+    is_enabled = BooleanField("اتصال فعال", default=True)
+    require_approval_for_sensitive = BooleanField("عملیات حساس نیازمند تأیید مدیر", default=True)
