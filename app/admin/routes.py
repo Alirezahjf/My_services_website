@@ -1,10 +1,11 @@
 """Authenticated content management. All mutations use POST and CSRF protection."""
 import csv
 import io
+import secrets
 from datetime import datetime
 from functools import wraps
 import bleach
-from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, g, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 from sqlalchemy import func, or_
 from app.extensions import db, limiter
@@ -681,7 +682,8 @@ def faq_delete(faq_id):
 @login_required
 def content():
     rows = PageContent.query.order_by(PageContent.page_key, PageContent.position).all()
-    return render_template("admin/content.html", contents=rows, delete_form=DeleteForm())
+    pages = CustomPage.query.order_by(CustomPage.updated_at.desc()).all()
+    return render_template("admin/content.html", contents=rows, custom_pages=pages, delete_form=DeleteForm())
 
 
 @bp.route("/content/new", methods=["GET", "POST"])
@@ -952,6 +954,12 @@ def custom_pages():
 def custom_page_edit(page_id=None):
     item = CustomPage.query.get_or_404(page_id) if page_id else None
     form = CustomPageForm(obj=item)
+    form.parent_content_id.choices = [(0, "بدون اتصال؛ فقط صفحه مستقل")] + [
+        (content.id, f"{content.page_key}/{content.section_key} — {content.title or 'بدون عنوان'}")
+        for content in PageContent.query.order_by(PageContent.page_key, PageContent.position).all()
+    ]
+    if not item and request.method == "GET":
+        form.parent_content_id.data = request.args.get("parent_content_id", 0, type=int)
     if form.validate_on_submit():
         page = item or CustomPage()
         try:
@@ -972,6 +980,8 @@ def custom_page_edit(page_id=None):
 @login_required
 def custom_page_preview(page_id):
     page = CustomPage.query.get_or_404(page_id)
+    if page.css_content or page.js_content:
+        g.csp_nonce = secrets.token_urlsafe(18)
     return render_template("public/custom_page.html", page=page, admin_preview=True)
 
 

@@ -1,1 +1,42 @@
-{% extends 'admin/base.html' %}{% from 'public/_macros.html' import render_field %}{% block title %}{{ title }}{% endblock %}{% block page_subtitle %}HTML پیش از ذخیره Sanitize می‌شود؛ Script، Iframe و رویدادهای ناامن اجرا نمی‌شوند{% endblock %}{% block actions %}{% if page %}<a class="admin-secondary" target="_blank" href="{{ url_for('admin.custom_page_preview',page_id=page.id) }}">پیش‌نمایش خصوصی ↗</a>{% if page.status=='published' %}<a class="admin-secondary" target="_blank" href="{{ url_for('public.custom_page',page_path=page.slug) }}">مشاهده عمومی ↗</a>{% endif %}{% endif %}{% endblock %}{% block content %}<form method="post" class="admin-form"><div class="form-layout"><div class="form-main"><section class="admin-panel form-section">{{ form.hidden_tag() }}<div class="admin-form-grid">{{ render_field(form.title) }}{{ render_field(form.heading) }}</div>{{ render_field(form.slug,help='مسیرهای فارسی و انگلیسی توکار پشتیبانی می‌شوند. تغییر آدرس، Redirect 301 از آدرس قبلی می‌سازد.') }}{{ render_field(form.subtitle) }}{{ render_field(form.summary,rows=3) }}{{ render_field(form.html_content,rows=18,help='تگ‌های متنی، لینک، تصویر، جدول و بخش‌بندی امن پشتیبانی می‌شوند.') }}</section><section class="admin-panel form-section"><h2>سئو</h2>{{ render_field(form.seo_title) }}{{ render_field(form.seo_description,rows=3) }}</section></div><aside class="form-sidebar"><section class="admin-panel form-section sticky-settings"><h2>انتشار و ناوبری</h2>{{ render_field(form.status) }}{{ render_field(form.menu_title) }}{{ render_field(form.menu_order) }}<div class="switch-field">{{ form.show_in_main() }}<label for="{{ form.show_in_main.id }}"><strong>منوی اصلی</strong><small>فقط پس از انتشار عمومی</small></label></div><div class="switch-field">{{ form.show_in_hamburger() }}<label for="{{ form.show_in_hamburger.id }}"><strong>منوی همبرگری</strong><small>کنترل مستقل موبایل</small></label></div><div class="switch-field">{{ form.show_in_footer() }}<label for="{{ form.show_in_footer.id }}"><strong>فوتر</strong><small>لینک دسترسی سریع</small></label></div><div class="switch-field">{{ form.menu_links_enabled() }}<label for="{{ form.menu_links_enabled.id }}"><strong>لینک فعال</strong><small>غیرفعال‌سازی بدون حذف صفحه</small></label></div><div class="switch-field">{{ form.open_in_new_tab() }}<label for="{{ form.open_in_new_tab.id }}"><strong>تب جدید</strong><small>با rel امن</small></label></div><button class="admin-primary button-block">ذخیره صفحه</button><a class="cancel-link" href="{{ url_for('admin.custom_pages') }}">بازگشت به فهرست</a></section></aside></div></form>{% endblock %}
+{% extends 'admin/base.html' %}
+{% from 'public/_macros.html' import render_field %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_subtitle %}HTML پاک‌سازی می‌شود؛ CSS و JavaScript فقط برای کد قابل‌اعتماد مدیر و در همان صفحه اجرا می‌شوند{% endblock %}
+{% block actions %}{% if page %}<a class="admin-secondary" target="_blank" href="{{ url_for('admin.custom_page_preview',page_id=page.id) }}">پیش‌نمایش خصوصی ↗</a>{% if page.status=='published' %}<a class="admin-secondary" target="_blank" href="{{ url_for('public.custom_page',page_path=page.slug) }}">مشاهده عمومی ↗</a>{% endif %}{% endif %}{% endblock %}
+{% block content %}
+<form method="post" class="admin-form">
+  <div class="form-layout">
+    <div class="form-main">
+      <section class="admin-panel form-section">
+        {{ form.hidden_tag() }}
+        <div class="admin-form-grid">{{ render_field(form.title) }}{{ render_field(form.heading) }}</div>
+        {{ render_field(form.slug,help='مسیرهای فارسی و انگلیسی توکار پشتیبانی می‌شوند. تغییر آدرس، Redirect 301 از آدرس قبلی می‌سازد.') }}
+        {{ render_field(form.subtitle) }}{{ render_field(form.summary,rows=3) }}
+        {{ render_field(form.html_content,rows=18,help='تگ‌های متنی، لینک، تصویر، جدول و بخش‌بندی امن پشتیبانی می‌شوند. Script را در فیلد JavaScript جداگانه وارد کنید.') }}
+      </section>
+      <section class="admin-panel form-section custom-code-section">
+        <h2>CSS و JavaScript اختصاصی</h2>
+        <div class="security-banner"><strong>فقط کد قابل‌اعتماد مدیر</strong><p>این کد با Nonce امنیتی فقط در همین صفحه اجرا می‌شود. کد ناشناس، Script دریافتی از ایجنت یا کد خارج از محدوده صفحه وارد نکنید.</p></div>
+        {{ render_field(form.css_content,rows=12,help='فقط محتوای CSS بدون تگ <style>؛ مانند .custom-page-content{color:#223}') }}
+        {{ render_field(form.js_content,rows=12,help='فقط محتوای JavaScript بدون تگ <script>؛ پس از بارگذاری صفحه اجرا می‌شود.') }}
+      </section>
+      <section class="admin-panel form-section"><h2>سئو</h2>{{ render_field(form.seo_title) }}{{ render_field(form.seo_description,rows=3) }}</section>
+    </div>
+    <aside class="form-sidebar">
+      <section class="admin-panel form-section sticky-settings">
+        <h2>انتشار، محتوا و ناوبری</h2>
+        {{ render_field(form.status) }}
+        {{ render_field(form.parent_content_id,help='لینک صفحه منتشرشده در فهرست «محتوای صفحات» و زیر همان بخش در قالب عمومی نمایش داده می‌شود.') }}
+        {{ render_field(form.menu_title) }}{{ render_field(form.menu_order) }}
+        <div class="switch-field">{{ form.show_in_main() }}<label for="{{ form.show_in_main.id }}"><strong>منوی اصلی</strong><small>فقط پس از انتشار عمومی</small></label></div>
+        <div class="switch-field">{{ form.show_in_hamburger() }}<label for="{{ form.show_in_hamburger.id }}"><strong>منوی همبرگری</strong><small>کنترل مستقل موبایل</small></label></div>
+        <div class="switch-field">{{ form.show_in_footer() }}<label for="{{ form.show_in_footer.id }}"><strong>فوتر</strong><small>لینک دسترسی سریع</small></label></div>
+        <div class="switch-field">{{ form.menu_links_enabled() }}<label for="{{ form.menu_links_enabled.id }}"><strong>لینک فعال</strong><small>غیرفعال‌سازی بدون حذف صفحه</small></label></div>
+        <div class="switch-field">{{ form.open_in_new_tab() }}<label for="{{ form.open_in_new_tab.id }}"><strong>تب جدید</strong><small>با rel امن</small></label></div>
+        <button class="admin-primary button-block">ذخیره صفحه</button>
+        <a class="cancel-link" href="{{ url_for('admin.custom_pages') }}">بازگشت به فهرست</a>
+      </section>
+    </aside>
+  </div>
+</form>
+{% endblock %}

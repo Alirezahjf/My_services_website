@@ -4,7 +4,7 @@ import unicodedata
 from urllib.parse import unquote
 import bleach
 from app.extensions import db
-from app.models import CustomPage, PageRedirect
+from app.models import CustomPage, PageContent, PageRedirect
 from app.services.utils import slugify
 
 ALLOWED_TAGS = ["p", "br", "strong", "b", "em", "i", "ul", "ol", "li", "h2", "h3", "h4", "blockquote", "a", "code", "pre", "img", "figure", "figcaption", "table", "thead", "tbody", "tr", "th", "td", "hr", "section", "div", "span"]
@@ -41,6 +41,8 @@ def page_dict(page):
     return {"id": page.id, "slug": page.slug, "url": "/" + page.slug, "title": page.title,
             "heading": page.heading, "subtitle": page.subtitle, "summary": page.summary,
             "html_content": page.html_content, "status": page.status,
+            "parent_content_id": page.parent_content_id,
+            "has_custom_css": bool(page.css_content), "has_custom_js": bool(page.js_content),
             "published_at": page.published_at.isoformat() if page.published_at else None,
             "seo_title": page.seo_title, "seo_description": page.seo_description,
             "show_in_main": page.show_in_main, "show_in_hamburger": page.show_in_hamburger,
@@ -72,6 +74,16 @@ def apply_page_data(page, data):
         raise PageValidationError("عنوان و عنوان اصلی صفحه الزامی است.")
     if "html_content" in data:
         page.html_content = sanitize_page_html(data.get("html_content"))
+    # Custom code is accepted only from the admin form; agent schemas never expose these keys.
+    if "css_content" in data:
+        page.css_content = data.get("css_content") or ""
+    if "js_content" in data:
+        page.js_content = data.get("js_content") or ""
+    if "parent_content_id" in data:
+        content_id = data.get("parent_content_id") or None
+        if content_id and not db.session.get(PageContent, content_id):
+            raise PageValidationError("بخش محتوایی انتخاب‌شده وجود ندارد.")
+        page.parent_content_id = content_id
     for field in ("show_in_main", "show_in_hamburger", "show_in_footer", "menu_links_enabled", "open_in_new_tab"):
         if field in data:
             setattr(page, field, bool(data.get(field)))

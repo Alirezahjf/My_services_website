@@ -87,7 +87,7 @@ curl -fsS -X POST http://SERVER_IP:9900/api/agent/v1/call/create_page \
 | 409 | `conflict` | عملیات با وضعیت فعلی سازگار نیست |
 | 429 | `rate_limited` | سقف درخواست در دقیقه رد شده است |
 
-Schemaها `additionalProperties=false` دارند. SQL، Shell، مسیر فایل، Source Code، رمز یا Token به‌عنوان ورودی ابزار پذیرفته نمی‌شود.
+Schemaها `additionalProperties=false` دارند. SQL، Shell، مسیر فایل، Source Code، رمز یا Token به‌عنوان ورودی ابزار پذیرفته نمی‌شود. فیلدهای CSS و JavaScript صفحه اختصاصی فقط در فرم مدیر وجود دارند و Agent نمی‌تواند آن‌ها را بسازد یا تغییر دهد؛ HTML ورودی Agent نیز Sanitize می‌شود.
 
 ## اجرای MCP
 

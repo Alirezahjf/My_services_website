@@ -80,3 +80,44 @@ def test_new_admin_interfaces_render(admin_client):
     for path in ("/admin/pages", "/admin/menus", "/admin/agents", "/admin/agent-activity"):
         response = admin_client.get(path)
         assert response.status_code == 200, path
+
+
+def test_linked_page_appears_in_content_admin_and_public_section(admin_client, client, app):
+    from app.models import PageContent
+    with app.app_context():
+        content = PageContent.query.filter_by(page_key="about", section_key="main").one()
+        content_id = content.id
+    payload = page_payload(slug="company/linked", title="صفحه زیرمجموعه", status="published", parent_content_id=content_id)
+    created = admin_client.post("/admin/pages/new", data=payload)
+    with app.app_context():
+        saved = CustomPage.query.filter_by(slug="company/linked").one()
+        assert saved.parent_content_id == content_id, created.data.decode()
+        assert db.session.get(PageContent, content_id).custom_pages.count() == 1
+    public = client.get("/about")
+    assert public.status_code == 200
+    assert "صفحه‌های مرتبط".encode() in public.data and "مشاوره".encode() in public.data
+    assert b'href="/company/linked"' in public.data
+    admin_list = admin_client.get("/admin/content")
+    assert "صفحه زیرمجموعه".encode() in admin_list.data and b"content-child-page" in admin_list.data
+    with app.app_context(): page_id = CustomPage.query.filter_by(slug="company/linked").one().id
+    admin_client.post(f"/admin/pages/{page_id}/status", data={"status": "unpublished"})
+    assert b'href="/company/linked"' not in client.get("/about").data
+
+
+def test_admin_only_css_javascript_and_csp_nonce(admin_client, client, app):
+    payload = page_payload(
+        slug="coded-page", status="published",
+        css_content=".custom-page-content{--trusted-color:rgb(1, 2, 3)}",
+        js_content="document.documentElement.dataset.trustedPage='yes';",
+    )
+    admin_client.post("/admin/pages/new", data=payload)
+    response = client.get("/coded-page")
+    assert response.status_code == 200
+    assert b"--trusted-color:rgb(1, 2, 3)" in response.data
+    assert b"dataset.trustedPage='yes'" in response.data
+    csp = response.headers["Content-Security-Policy"]
+    assert "nonce-" in csp
+    nonce = response.data.decode().split('<script nonce="')[1].split('"')[0]
+    assert f"'nonce-{nonce}'" in csp
+    ordinary = client.get("/")
+    assert "nonce-" not in ordinary.headers["Content-Security-Policy"]

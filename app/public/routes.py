@@ -1,6 +1,7 @@
 """Public, read-only catalogue and lead capture routes."""
 from pathlib import Path
-from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
+import secrets
+from flask import Blueprint, abort, current_app, flash, g, jsonify, redirect, render_template, request, send_from_directory, url_for
 from sqlalchemy import or_
 from werkzeug.exceptions import HTTPException
 from sqlalchemy.orm import joinedload, selectinload
@@ -224,6 +225,8 @@ def custom_page(page_path):
         path = normalize_page_path(page_path)
         page = CustomPage.query.filter_by(slug=path, status="published").first()
         if page:
+            if page.css_content or page.js_content:
+                g.csp_nonce = secrets.token_urlsafe(18)
             return render_template("public/custom_page.html", page=page, admin_preview=False)
         old = PageRedirect.query.filter_by(old_path=path).first()
         if old and old.page and old.page.status == "published":

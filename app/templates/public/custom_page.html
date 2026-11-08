@@ -1,1 +1,25 @@
-{% extends 'base.html' %}{% block title %}{{ page.seo_title or page.title }}{% endblock %}{% block description %}{{ page.seo_description or page.summary or page.subtitle }}{% endblock %}{% block body_class %}custom-page-view{% endblock %}{% block content %}{% if admin_preview %}<div class="preview-bar">پیش‌نمایش خصوصی — وضعیت: {{ page.status }}<a href="{{ url_for('admin.custom_page_edit',page_id=page.id) }}">بازگشت به ویرایش</a></div>{% endif %}<article class="custom-page"><header class="custom-page-hero"><div class="custom-page-grid" aria-hidden="true"></div><div class="container custom-page-hero-inner" data-page-enter><span class="eyebrow">{{ page.title }}</span><h1>{{ page.heading }}</h1>{% if page.subtitle %}<p class="custom-page-subtitle">{{ page.subtitle }}</p>{% endif %}{% if page.summary %}<p class="custom-page-summary">{{ page.summary }}</p>{% endif %}</div></header><div class="container custom-page-content reveal">{{ page.html_content|safe_html }}</div></article>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}{{ page.seo_title or page.title }}{% endblock %}
+{% block description %}{{ page.seo_description or page.summary or page.subtitle }}{% endblock %}
+{% block body_class %}custom-page-view{% endblock %}
+{% block head %}
+  {% if page.css_content %}<style{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>{{ page.css_content|safe }}</style>{% endif %}
+{% endblock %}
+{% block content %}
+  {% if admin_preview %}<div class="preview-bar">پیش‌نمایش خصوصی — وضعیت: {{ page.status }}<a href="{{ url_for('admin.custom_page_edit',page_id=page.id) }}">بازگشت به ویرایش</a></div>{% endif %}
+  <article class="custom-page">
+    <header class="custom-page-hero">
+      <div class="custom-page-grid" aria-hidden="true"></div>
+      <div class="container custom-page-hero-inner" data-page-enter>
+        <span class="eyebrow">{{ page.title }}</span>
+        <h1>{{ page.heading }}</h1>
+        {% if page.subtitle %}<p class="custom-page-subtitle">{{ page.subtitle }}</p>{% endif %}
+        {% if page.summary %}<p class="custom-page-summary">{{ page.summary }}</p>{% endif %}
+      </div>
+    </header>
+    <div class="container custom-page-content reveal">{{ page.html_content|safe_html }}</div>
+  </article>
+{% endblock %}
+{% block scripts %}
+  {% if page.js_content %}<script nonce="{{ csp_nonce }}">{{ page.js_content|safe }}</script>{% endif %}
+{% endblock %}

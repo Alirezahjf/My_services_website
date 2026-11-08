@@ -46,3 +46,10 @@
 {% macro page_hero(eyebrow,title,subtitle) %}
 <section class="page-hero"><div class="container page-hero-inner"><div><span class="eyebrow">{{ eyebrow }}</span><h1>{{ title }}</h1><p>{{ subtitle }}</p></div><div class="page-hero-orb" aria-hidden="true"></div></div></section>
 {% endmacro %}
+
+{% macro content_page_links(section) %}
+  {% if section %}
+    {% set published_links=linked_pages(section.id) %}
+    {% if published_links %}<nav class="content-linked-pages" aria-label="صفحه‌های مرتبط با {{ section.title }}"><strong>صفحه‌های مرتبط</strong><div>{% for page in published_links|sort(attribute='menu_order') %}<a href="{{ url_for('public.custom_page',page_path=page.slug) }}"><span>{{ page.menu_title or page.title }}</span>{% if page.summary %}<small>{{ page.summary }}</small>{% endif %}<b aria-hidden="true">↙</b></a>{% endfor %}</div></nav>{% endif %}
+  {% endif %}
+{% endmacro %}

@@ -3,7 +3,7 @@ import logging
 import os
 from pathlib import Path
 import click
-from flask import Flask, render_template, request
+from flask import Flask, g, render_template, request
 from markupsafe import Markup
 from flask_login import current_user
 from flask_wtf.csrf import CSRFError
@@ -47,6 +47,8 @@ def create_app(test_config=None):
         pages = CustomPage.query.filter_by(status="published", menu_links_enabled=True).order_by(CustomPage.menu_order, CustomPage.title).all()
         custom_items = MenuItem.query.filter_by(is_enabled=True, parent_id=None).order_by(MenuItem.location, MenuItem.position).all()
         return {"site": settings, "socials": socials, "setting": lambda key, default="": settings.get(key) or default,
+                "csp_nonce": g.get("csp_nonce", ""),
+                "linked_pages": lambda content_id: CustomPage.query.filter_by(parent_content_id=content_id, status="published").order_by(CustomPage.menu_order, CustomPage.title).all(),
                 "page_menus": {location: [p for p in pages if getattr(p, "show_in_" + location)] for location in ("main", "hamburger", "footer")},
                 "custom_menu_items": custom_items}
 
@@ -79,7 +81,10 @@ def create_app(test_config=None):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-        response.headers.setdefault("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+        script_source = "script-src 'self'"
+        if g.get("csp_nonce"):
+            script_source += f" 'nonce-{g.csp_nonce}'"
+        response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; {script_source}; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
         if request.path.startswith("/admin"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Robots-Tag"] = "noindex, nofollow"
