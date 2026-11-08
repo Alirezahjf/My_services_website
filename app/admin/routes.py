@@ -17,7 +17,7 @@ from app.services.activity import log_activity
 from app.services.media_service import MediaValidationError, delete_upload, save_upload
 from app.services.utils import client_ip_hash, slugify, split_lines
 from .forms import (CategoryForm, ConnectorForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LoginForm,
-                    MediaForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, ProductForm,
+                    MediaForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, PortfolioMediaEditForm, ProductForm, ProductMediaEditForm,
                     ServiceForm, SettingsForm, SocialForm, WorkflowForm)
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -525,6 +525,8 @@ def media_new():
         form.owner_id.choices = [(p.id, p.title) for p in Portfolio.query.order_by(Portfolio.title).all()]
     else:
         form.owner_id.choices = products_choices()
+    if request.method == "GET" and request.args.get("owner_id", type=int):
+        form.owner_id.data = request.args.get("owner_id", type=int)
     if form.validate_on_submit():
         kind = {"image": "image", "video": "video", "document": "document"}[form.media_type.data]
         uploaded_files = form.file.data if isinstance(form.file.data, list) else [form.file.data]
@@ -568,6 +570,57 @@ def media_new():
     return render_template("admin/simple_form.html", form=form, title="بارگذاری رسانه", back_url=url_for("admin.media_library"))
 
 
+@bp.route("/media/<kind>/<int:media_id>/edit", methods=["GET", "POST"])
+@login_required
+def media_edit(kind, media_id):
+    model = ProductMedia if kind == "product" else PortfolioMedia if kind == "portfolio" else None
+    if not model:
+        abort(404)
+    item = model.query.get_or_404(media_id)
+    form = (ProductMediaEditForm if kind == "product" else PortfolioMediaEditForm)(obj=item)
+    if form.validate_on_submit():
+        old_paths = [item.file_path, item.thumbnail_path]
+        new_paths = []
+        try:
+            if form.file.data:
+                saved = save_upload(form.file.data, {"image": "image", "video": "video", "document": "document"}[item.media_type])
+                new_paths = [saved["path"], saved["thumbnail"]]
+                item.file_path = saved["path"]
+                item.thumbnail_path = saved["thumbnail"]
+                item.mime_type = saved["mime_type"]
+                item.file_size = saved["size"]
+            item.title = form.title.data
+            item.description = form.description.data
+            item.alt_text = form.alt_text.data
+            item.position = form.position.data
+            item.is_published = form.is_published.data
+            if kind == "product":
+                item.is_mockup = form.is_mockup.data
+            else:
+                was_cover = item.is_cover
+                item.is_cover = form.is_cover.data
+                if item.is_cover:
+                    PortfolioMedia.query.filter(PortfolioMedia.portfolio_id == item.portfolio_id, PortfolioMedia.id != item.id).update({"is_cover": False})
+                    item.portfolio.cover_path = item.file_path
+                elif was_cover:
+                    item.portfolio.cover_path = None
+            log_activity("update", "Media", item.id, item.title)
+            db.session.commit()
+        except (MediaValidationError, OSError) as exc:
+            db.session.rollback()
+            for path in new_paths:
+                delete_upload(path)
+            flash(str(exc), "error")
+        else:
+            if new_paths:
+                for path in old_paths:
+                    if path and path not in new_paths:
+                        delete_upload(path)
+            flash("رسانه و تنظیمات نمایش آن به‌روز شد.", "success")
+            return redirect(url_for("admin.media_library"))
+    return render_template("admin/simple_form.html", form=form, title=f"ویرایش رسانه: {item.title}", back_url=url_for("admin.media_library"))
+
+
 @bp.post("/media/<kind>/<int:media_id>/delete")
 @login_required
 def media_delete(kind, media_id):
@@ -597,6 +650,8 @@ def faq_edit(faq_id=None):
     item = FAQ.query.get_or_404(faq_id) if faq_id else None
     form = FAQForm(obj=item)
     form.product_id.choices = products_choices((0, "پرسش عمومی"))
+    if request.method == "GET" and request.args.get("product", type=int):
+        form.product_id.data = request.args.get("product", type=int)
     if form.validate_on_submit():
         faq = item or FAQ()
         form.populate_obj(faq)

@@ -1,4 +1,6 @@
 import io
+from PIL import Image
+from app.extensions import db
 from app.models import Category, PageContent, Portfolio, Product, ProductFeature, ProductMedia, FAQ
 
 
@@ -67,6 +69,43 @@ def test_multiple_image_upload(admin_client, app, png_file):
     assert response.status_code == 200
     with app.app_context():
         assert ProductMedia.query.count() == initial_count + 2
+
+
+def test_edit_media_metadata_and_replace_file(admin_client, app, png_file):
+    with app.app_context():
+        product = Product.query.first()
+    upload = {"owner_type": "product", "owner_id": str(product.id), "title": "قبل از ویرایش", "media_type": "image", "position": 0, "is_published": "y", "file": (png_file, "before.png")}
+    admin_client.post("/admin/media/new", data=upload, content_type="multipart/form-data")
+    with app.app_context():
+        media = ProductMedia.query.filter_by(title="قبل از ویرایش").one()
+        media_id, old_path = media.id, media.file_path
+    response = admin_client.post(f"/admin/media/product/{media_id}/edit", data={"title": "بعد از ویرایش", "description": "توضیح تازه", "alt_text": "متن جایگزین", "position": 2, "is_published": "y", "is_mockup": "y"}, follow_redirects=True)
+    assert response.status_code == 200
+    with app.app_context():
+        media = db.session.get(ProductMedia, media_id)
+        assert media.title == "بعد از ویرایش" and media.is_mockup
+        assert media.file_path == old_path  # Metadata-only edits never delete the asset.
+    replacement = io.BytesIO()
+    Image.new("RGB", (100, 80), "#087ea4").save(replacement, "PNG")
+    replacement.seek(0)
+    response = admin_client.post(f"/admin/media/product/{media_id}/edit", data={"title": "فایل جایگزین", "position": 2, "is_published": "y", "file": (replacement, "after.png")}, content_type="multipart/form-data", follow_redirects=True)
+    assert response.status_code == 200
+    with app.app_context():
+        media = db.session.get(ProductMedia, media_id)
+        assert media.title == "فایل جایگزین" and media.file_path != old_path
+
+
+def test_product_edit_exposes_all_related_sections(admin_client, app):
+    with app.app_context():
+        product = Product.query.filter_by(slug="instapilot-ai").one()
+    response = admin_client.get(f"/admin/products/{product.id}/edit")
+    assert response.status_code == 200
+    for text in ["مدیریت کامل بخش‌های", "قابلیت‌ها", "پرسش‌های محصول", "رسانه‌ها", "Connectorها", "ماژول‌ها"]:
+        assert text.encode() in response.data
+    faq_form = admin_client.get(f"/admin/faqs/new?product={product.id}")
+    assert f'selected value="{product.id}"'.encode() in faq_form.data
+    media_form = admin_client.get(f"/admin/media/new?owner_type=product&owner_id={product.id}")
+    assert f'selected value="{product.id}"'.encode() in media_form.data
 
 
 def test_brand_settings_and_csv(admin_client, app):

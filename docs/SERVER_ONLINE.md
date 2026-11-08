@@ -100,7 +100,7 @@ Group=services
 WorkingDirectory=/srv/services/app
 EnvironmentFile=/srv/services/app/.env
 Environment=PATH=/srv/services/app/.venv/bin
-ExecStart=/srv/services/app/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 127.0.0.1:9900 --access-logfile - --error-logfile - "app:create_app()"
+ExecStart=/srv/services/app/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:9900 --access-logfile - --error-logfile - "app:create_app()"
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -116,9 +116,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now services-website
 sudo systemctl status services-website --no-pager
 curl -I http://127.0.0.1:9900/
+# پس از بازشدن پورت در فایروال، از سیستم دیگر نیز بررسی کنید:
+curl -I http://PUBLIC_SERVER_IP:9900/
 ```
 
-Gunicorn فقط روی Loopback است؛ کاربران از طریق Nginx وارد می‌شوند. برای تغییرات بعدی:
+Gunicorn روی `0.0.0.0` اجرا می‌شود؛ بنابراین روی همه Interfaceها از جمله IP عمومی سرور Listen می‌کند، نه فقط localhost. مسیر مستقیم سایت `http://PUBLIC_SERVER_IP:9900` و مدیریت `http://PUBLIC_SERVER_IP:9900/admin/login` است. برای محیط نهایی بهتر است کاربران از دامنه HTTPS وارد شوند و دسترسی مستقیم پورت 9900 محدود شود. برای تغییرات بعدی:
 
 ```bash
 cd /srv/services/app
@@ -161,8 +163,12 @@ sudo systemctl reload nginx
 ```bash
 sudo ufw allow OpenSSH
 sudo ufw allow 'Nginx Full'
+# برای دسترسی مستقیم به Flask/Gunicorn با IP عمومی و پورت 9900:
+sudo ufw allow 9900/tcp
 sudo ufw enable
 ```
+
+ورود ادمین روی HTTP عمومی رمزنگاری نمی‌شود. پورت 9900 را فقط برای آزمایش اولیه یا از IP مدیریتی مجاز باز کنید؛ پس از فعال‌شدن HTTPS می‌توانید دسترسی عمومی آن را با `sudo ufw delete allow 9900/tcp` ببندید. در این حالت نیز Gunicorn روی `0.0.0.0` باقی می‌ماند و Nginx از طریق Loopback به آن متصل می‌شود.
 
 ## ۷. HTTPS با Certbot
 

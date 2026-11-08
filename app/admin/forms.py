@@ -121,6 +121,23 @@ class MediaForm(FlaskForm):
     is_published = BooleanField("منتشر شود", default=True)
 
 
+class MediaEditForm(FlaskForm):
+    title = StringField("عنوان", validators=[DataRequired(), Length(max=180)])
+    description = TextAreaField("توضیح", validators=[Optional(), Length(max=3000)])
+    alt_text = StringField("متن جایگزین", validators=[Optional(), Length(max=240)])
+    file = FileField("جایگزینی فایل (اختیاری)", validators=[Optional(), FileAllowed(IMAGE_TYPES + ["mp4", "webm", "ogg", "pdf"], "فرمت فایل مجاز نیست.")])
+    position = IntegerField("ترتیب", default=0)
+    is_published = BooleanField("منتشر شود", default=True)
+
+
+class ProductMediaEditForm(MediaEditForm):
+    is_mockup = BooleanField("تصویر نمایشی/Mockup است")
+
+
+class PortfolioMediaEditForm(MediaEditForm):
+    is_cover = BooleanField("کاور نمونه‌کار")
+
+
 class PortfolioForm(FlaskForm):
     title = StringField("عنوان", validators=[DataRequired(), Length(max=180)])
     slug = StringField("نامک", validators=[Optional(), Length(max=200)])
