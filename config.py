@@ -33,6 +33,7 @@ class Config:
     PREFERRED_URL_SCHEME = "https" if SESSION_COOKIE_SECURE else "http"
     SERVER_NAME = None
     PORT = int(os.getenv("PORT", "9900"))
+    ENFORCE_HTTPS = _bool(os.getenv("ENFORCE_HTTPS"), False)
     HOST = os.getenv("HOST", "0.0.0.0")
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
     GITHUB_API_URL = os.getenv("GITHUB_API_URL", "https://api.github.com")

@@ -7,12 +7,12 @@ from .content import FAQ, SiteSetting, PageContent, WorkflowStep, SocialLink, Se
 from .lead import ContactMessage, Lead
 from .github import ProductRepository, ProductRepositoryMembership, GitHubSyncLog, RepositoryAnalysis, ActivityLog
 from .page import CustomPage, PageRedirect, MenuItem
-from .agent import AgentConnection, AgentApproval, AgentActivity
+from .agent import AgentConnection, AgentApproval, AgentActivity, AgentIdempotency, AgentRefreshToken
 
 __all__ = [
     "AdminUser", "Category", "Product", "ProductFeature", "ProductMedia", "Tag",
     "Portfolio", "PortfolioMedia", "ProductPortfolio", "FAQ", "SiteSetting",
     "PageContent", "WorkflowStep", "SocialLink", "Service", "ContactMessage", "Lead",
     "ProductRepository", "ProductRepositoryMembership", "PlatformConnector", "ProductModule", "GitHubSyncLog", "RepositoryAnalysis", "ActivityLog",
-    "CustomPage", "PageRedirect", "MenuItem", "AgentConnection", "AgentApproval", "AgentActivity",
+    "CustomPage", "PageRedirect", "MenuItem", "AgentConnection", "AgentApproval", "AgentActivity", "AgentIdempotency", "AgentRefreshToken",
 ]

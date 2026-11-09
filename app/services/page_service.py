@@ -42,6 +42,7 @@ def page_dict(page):
             "heading": page.heading, "subtitle": page.subtitle, "summary": page.summary,
             "html_content": page.html_content, "status": page.status,
             "parent_content_id": page.parent_content_id,
+            "custom_css": page.css_content or "", "custom_js": page.js_content or "",
             "has_custom_css": bool(page.css_content), "has_custom_js": bool(page.js_content),
             "published_at": page.published_at.isoformat() if page.published_at else None,
             "seo_title": page.seo_title, "seo_description": page.seo_description,
@@ -75,10 +76,10 @@ def apply_page_data(page, data):
     if "html_content" in data:
         page.html_content = sanitize_page_html(data.get("html_content"))
     # Custom code is accepted only from the admin form; agent schemas never expose these keys.
-    if "css_content" in data:
-        page.css_content = data.get("css_content") or ""
-    if "js_content" in data:
-        page.js_content = data.get("js_content") or ""
+    if "css_content" in data or "custom_css" in data:
+        page.css_content = data.get("css_content", data.get("custom_css")) or ""
+    if "js_content" in data or "custom_js" in data:
+        page.js_content = data.get("js_content", data.get("custom_js")) or ""
     if "parent_content_id" in data:
         content_id = data.get("parent_content_id") or None
         if content_id and not db.session.get(PageContent, content_id):

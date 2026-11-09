@@ -41,6 +41,28 @@ class AgentApproval(TimestampMixin, db.Model):
     reviewer = db.relationship("AdminUser")
 
 
+class AgentIdempotency(TimestampMixin, db.Model):
+    __tablename__ = "agent_idempotency_keys"
+    id = db.Column(db.Integer, primary_key=True)
+    agent_id = db.Column(db.Integer, db.ForeignKey("agent_connections.id", ondelete="CASCADE"), nullable=False, index=True)
+    key = db.Column(db.String(100), nullable=False)
+    tool_name = db.Column(db.String(120), nullable=False)
+    payload_hash = db.Column(db.String(64), nullable=False)
+    response = db.Column(db.JSON, nullable=False)
+    agent = db.relationship("AgentConnection")
+    __table_args__ = (db.UniqueConstraint("agent_id", "key", name="uq_agent_idempotency"),)
+
+
+class AgentRefreshToken(TimestampMixin, db.Model):
+    __tablename__ = "agent_refresh_tokens"
+    id = db.Column(db.Integer, primary_key=True)
+    agent_id = db.Column(db.Integer, db.ForeignKey("agent_connections.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    revoked_at = db.Column(db.DateTime)
+    agent = db.relationship("AgentConnection")
+
+
 class AgentActivity(TimestampMixin, db.Model):
     __tablename__ = "agent_activities"
     id = db.Column(db.Integer, primary_key=True)

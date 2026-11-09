@@ -6,6 +6,7 @@ import contextvars
 import inspect
 import json
 import os
+from flask import g
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from app import create_app
@@ -34,7 +35,7 @@ def _handler(name, tool):
                 raise ToolError(json.dumps({"code": exc.code, "message": str(exc)}, ensure_ascii=False)) from exc
     parameters = []
     for key, rule in tool.schema["properties"].items():
-        annotation = {"string": str, "integer": int, "boolean": bool}[rule["type"]]
+        annotation = {"string": str, "integer": int, "boolean": bool, "array": list[str]}[rule["type"]]
         default = inspect.Parameter.empty if key in tool.schema["required"] else None
         parameters.append(inspect.Parameter(key, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=annotation))
     call.__signature__ = inspect.Signature(parameters, return_annotation=dict)
@@ -52,19 +53,87 @@ for tool_name, definition in TOOLS.items():
 def site_overview():
     """Safe branding and public record counts for the authenticated agent."""
     agent = current_agent.get()
-    if not agent or "reports.read" not in (agent.permissions or []):
+    if not agent:
         return json.dumps({"ok": False, "error": "reports.read required"})
     with flask_app.app_context():
         from app.extensions import db
-        return json.dumps(execute_tool(db.session.merge(agent), "get_site_overview", {}), ensure_ascii=False)
+        agent = db.session.merge(agent)
+        if "reports.read" not in (agent.permissions or []):
+            return json.dumps({"ok": False, "error": "reports.read required"})
+        return json.dumps(execute_tool(agent, "get_site_overview", {}), ensure_ascii=False)
 
 
 @mcp.resource("site://tools")
 def available_tools():
     """Names and permissions available to this connection."""
     agent = current_agent.get()
-    allowed = set(agent.permissions or []) if agent else set()
+    with flask_app.app_context():
+        from app.extensions import db
+        agent = db.session.merge(agent) if agent else None
+        allowed = set(agent.permissions or []) if agent else set()
     return json.dumps({name: tool.description for name, tool in TOOLS.items() if tool.permission in allowed}, ensure_ascii=False)
+
+
+@mcp.resource("hjf://products/{product_id}")
+def product_resource(product_id: int):
+    agent = current_agent.get()
+    if not agent:
+        raise ToolError("products.read required")
+    with flask_app.app_context():
+        from app.extensions import db
+        agent = db.session.merge(agent)
+        if "products.read" not in (agent.permissions or []):
+            raise ToolError("products.read required")
+        return json.dumps(execute_tool(agent, "get_product", {"product_id": product_id}), ensure_ascii=False)
+
+
+@mcp.resource("hjf://pages/{page_id}")
+def page_resource(page_id: int):
+    agent = current_agent.get()
+    if not agent:
+        raise ToolError("pages.read required")
+    with flask_app.app_context():
+        from app.extensions import db
+        agent = db.session.merge(agent)
+        if "pages.read" not in (agent.permissions or []):
+            raise ToolError("pages.read required")
+        return json.dumps(execute_tool(agent, "get_page", {"page_id": page_id}), ensure_ascii=False)
+
+
+@mcp._mcp_server.list_resources()
+async def list_business_resources():
+    from mcp.types import Resource
+    from app.models import Product, CustomPage
+    agent = current_agent.get()
+    resources = []
+    with flask_app.app_context():
+        from app.extensions import db
+        agent = db.session.merge(agent) if agent else None
+        if agent and "products.read" in (agent.permissions or []):
+            resources.extend(Resource(uri=f"hjf://products/{row.id}", name=row.name, description="Product record", mimeType="application/json") for row in Product.query.order_by(Product.id).limit(200).all())
+        if agent and "pages.read" in (agent.permissions or []):
+            resources.extend(Resource(uri=f"hjf://pages/{row.id}", name=row.title, description="Custom page record", mimeType="application/json") for row in CustomPage.query.order_by(CustomPage.id).limit(200).all())
+    resources.append(Resource(uri="site://overview", name="Site overview", mimeType="application/json"))
+    resources.append(Resource(uri="site://tools", name="Available tools", mimeType="application/json"))
+    return resources
+
+
+@mcp.prompt()
+def summarize_product(product_id: int):
+    """Create a truthful Persian product summary using the authorized resource."""
+    return f"Read hjf://products/{product_id} and summarize the actual product in Persian. Distinguish verified capabilities from development plans; never invent integrations or demos."
+
+
+@mcp.prompt()
+def audit_product(product_id: int):
+    """Audit product transparency against its real record."""
+    return f"Read hjf://products/{product_id}. Produce a Persian checklist for description accuracy, requirements, limitations, repository status, media, SEO and unsupported claims."
+
+
+@mcp.prompt()
+def generate_black_friday_card(product_ids: str):
+    """Generate a safe custom page proposal for selected comma-separated product IDs."""
+    return f"For these authorized product IDs: {product_ids}, read their resources and propose a Persian Black Friday custom page. Use only actual prices/discounts. Return draft HTML, custom_css and custom_js separately. Use textContent for a countdown; no eval or innerHTML. Publishing requires approval."
 
 
 @mcp.prompt()
@@ -82,30 +151,44 @@ class BearerAgentMiddleware:
             await self.app(scope, receive, send)
             return
         headers = dict(scope.get("headers", []))
+        method = scope.get("method", "GET")
+        path = scope.get("path", "")
+        if method == "GET" and path in {"/mcp", "/.well-known/mcp.json"}:
+            body = json.dumps({"name": "HJF Website Manager", "protocol": "MCP", "transport": "streamable-http", "endpoint": "/mcp", "capabilities": {"tools": True, "resources": True, "prompts": True}, "authentication": "Authorization: Bearer hjf_..."}).encode()
+            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
         content_length = int(headers.get(b"content-length", b"0") or 0)
         authorization = headers.get(b"authorization", b"").decode("latin1")
         token = authorization[7:].strip() if authorization.startswith("Bearer ") else None
         error = None
         agent = None
+        rate = {}
         if content_length > 1048576:
             error = (413, "payload_too_large", "Maximum MCP request size is 1MB")
         else:
             with flask_app.app_context():
                 try:
-                    agent = authenticate_token(token)
+                    agent = authenticate_token(token, rate_multiplier=2)
+                    rate = g.get("agent_rate", {})
                     if not agent:
                         error = (401, "unauthorized", "Valid, active and unexpired agent token required")
                 except AgentToolError as exc:
                     error = (429, exc.code, str(exc))
         if error:
             status, code, message = error
-            body = json.dumps({"jsonrpc": "2.0", "error": {"code": code, "message": message}}).encode()
+            body = json.dumps({"jsonrpc": "2.0", "error": {"code": -32000 if status == 429 else -32001, "message": message, "data": {"code": code}}}).encode()
             await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()), (b"www-authenticate", b"Bearer")]})
             await send({"type": "http.response.body", "body": body})
             return
         reset = current_agent.set(agent)
+        async def send_with_rate(message):
+            if message["type"] == "http.response.start":
+                message = dict(message)
+                message["headers"] = list(message.get("headers", [])) + [(b"x-mcp-ratelimit-limit", str(rate.get("limit", 120)).encode()), (b"x-mcp-ratelimit-remaining", str(rate.get("remaining", 0)).encode()), (b"x-mcp-ratelimit", f"limit={rate.get('limit', 120)}; remaining={rate.get('remaining', 0)}".encode())]
+            await send(message)
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, send_with_rate)
         finally:
             current_agent.reset(reset)
 

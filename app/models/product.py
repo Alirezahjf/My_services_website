@@ -68,6 +68,15 @@ class Product(TimestampMixin, db.Model):
     release_date = db.Column(db.Date)
     seo_title = db.Column(db.String(180))
     seo_description = db.Column(db.String(320))
+    price = db.Column(db.Numeric(14, 2))
+    compare_price = db.Column(db.Numeric(14, 2))
+    currency = db.Column(db.String(3), default="USD")
+    demo_url = db.Column(db.String(500))
+    docs_url = db.Column(db.String(500))
+    is_black_friday = db.Column(db.Boolean, default=False, nullable=False)
+    black_friday_discount_percent = db.Column(db.Integer)
+    view_count = db.Column(db.Integer, default=0, nullable=False)
+    updated_by_agent_id = db.Column(db.Integer, db.ForeignKey("agent_connections.id", ondelete="SET NULL"), index=True)
 
     category = db.relationship("Category", back_populates="products", foreign_keys=[category_id])
     additional_categories = db.relationship("Category", secondary=product_category_links, backref="additional_products", lazy="selectin")
@@ -114,7 +123,7 @@ class ProductFeature(TimestampMixin, db.Model):
 class ProductMedia(TimestampMixin, db.Model):
     __tablename__ = "product_media"
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), nullable=True, index=True)
     title = db.Column(db.String(160), nullable=False)
     description = db.Column(db.Text)
     alt_text = db.Column(db.String(240))
@@ -127,4 +136,7 @@ class ProductMedia(TimestampMixin, db.Model):
     position = db.Column(db.Integer, default=0)
     is_published = db.Column(db.Boolean, default=True, nullable=False)
     is_mockup = db.Column(db.Boolean, default=False, nullable=False)
+    role = db.Column(db.String(20), default="gallery", nullable=False, index=True)
+    variants = db.Column(db.JSON, default=dict)
+    deleted_at = db.Column(db.DateTime, index=True)
     product = db.relationship("Product", back_populates="media")

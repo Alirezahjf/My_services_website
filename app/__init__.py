@@ -36,8 +36,9 @@ def create_app(test_config=None):
     from .admin.routes import bp as admin_bp
     app.register_blueprint(public_bp)
     app.register_blueprint(admin_bp)
-    from .agent_api import bp as agent_api_bp
+    from .agent_api import bp as agent_api_bp, discovery as agent_discovery_bp
     app.register_blueprint(agent_api_bp)
+    app.register_blueprint(agent_discovery_bp)
     csrf.exempt(agent_api_bp)
 
     @app.context_processor

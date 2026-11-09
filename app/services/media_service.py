@@ -103,3 +103,61 @@ def delete_upload(relative_path: str | None):
     root = Path(current_app.config["UPLOAD_FOLDER"]).resolve()
     if path.resolve().is_relative_to(root) and path.is_file():
         path.unlink()
+
+
+def save_agent_image(file: FileStorage) -> dict:
+    """Validate magic bytes, normalize raster images to WebP and create responsive variants."""
+    if not file or not file.filename:
+        raise MediaValidationError("فایل تصویر الزامی است.")
+    data = file.stream.read(5 * 1024 * 1024 + 1)
+    if len(data) > 5 * 1024 * 1024:
+        raise MediaValidationError("حجم تصویر بیش از ۵ مگابایت است.")
+    if not data:
+        raise MediaValidationError("فایل خالی است.")
+    extension = secure_filename(file.filename).rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if extension not in {"jpg", "jpeg", "png", "webp", "svg"}:
+        error = MediaValidationError("فرمت تصویر مجاز نیست.")
+        error.code = "invalid_mime"
+        raise error
+    folder = Path(current_app.config["UPLOAD_FOLDER"]) / "image"
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = uuid.uuid4().hex
+    if extension == "svg":
+        data = _safe_svg(data)
+        if file.mimetype not in {"image/svg+xml", "text/xml", "application/xml", "application/octet-stream"}:
+            error = MediaValidationError("MIME تصویر معتبر نیست.")
+            error.code = "invalid_mime"
+            raise error
+        path = folder / f"{stem}.svg"
+        path.write_bytes(data)
+        path.chmod(0o640)
+        relative = f"image/{stem}.svg"
+        return {"path": relative, "thumbnail": relative, "variants": {str(size): relative for size in (256, 512, 1024)}, "size": len(data), "mime_type": "image/svg+xml"}
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            source.verify()
+        with Image.open(io.BytesIO(data)) as source:
+            expected = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}[extension]
+            if source.format != expected:
+                raise UnidentifiedImageError
+            from PIL import ImageOps
+            image = ImageOps.exif_transpose(source)
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+            image.thumbnail((2400, 2400))
+            main_path = folder / f"{stem}.webp"
+            image.save(main_path, "WEBP", quality=88, method=6)
+            main_path.chmod(0o640)
+            variants = {}
+            for size in (256, 512, 1024):
+                variant = image.copy()
+                variant.thumbnail((size, size))
+                variant_path = folder / f"{stem}-{size}.webp"
+                variant.save(variant_path, "WEBP", quality=82, method=6)
+                variant_path.chmod(0o640)
+                variants[str(size)] = f"image/{stem}-{size}.webp"
+    except (UnidentifiedImageError, OSError) as exc:
+        error = MediaValidationError("محتوای فایل با تصویر واقعی همخوانی ندارد.")
+        error.code = "invalid_mime"
+        raise error from exc
+    return {"path": f"image/{stem}.webp", "thumbnail": variants["512"], "variants": variants, "size": len(data), "mime_type": "image/webp"}

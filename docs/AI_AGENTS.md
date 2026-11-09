@@ -87,7 +87,37 @@ curl -fsS -X POST http://SERVER_IP:9900/api/agent/v1/call/create_page \
 | 409 | `conflict` | عملیات با وضعیت فعلی سازگار نیست |
 | 429 | `rate_limited` | سقف درخواست در دقیقه رد شده است |
 
-Schemaها `additionalProperties=false` دارند. SQL، Shell، مسیر فایل، Source Code، رمز یا Token به‌عنوان ورودی ابزار پذیرفته نمی‌شود. فیلدهای CSS و JavaScript صفحه اختصاصی فقط در فرم مدیر وجود دارند و Agent نمی‌تواند آن‌ها را بسازد یا تغییر دهد؛ HTML ورودی Agent نیز Sanitize می‌شود.
+Schemaها `additionalProperties=false` دارند. SQL، Shell، مسیر فایل، Source Code، رمز یا Token به‌عنوان ورودی ابزار پذیرفته نمی‌شود. HTML ورودی Agent پاک‌سازی و متن‌های ساده از نظر Stored XSS بررسی می‌شوند. `custom_css` و `custom_js` تا ۵۰٬۰۰۰ نویسه پذیرفته می‌شوند؛ کد JavaScript با الگوهای پرخطر مانند `eval`، `new Function`، `innerHTML=` و `document.write` با `risky_js` رد می‌شود. کد صفحه فقط با Nonce مخصوص همان درخواست اجرا می‌شود و CSP عمومی سایت به `unsafe-inline` تغییر نمی‌کند.
+
+همه خطاها ساختار `{"ok":false,"error":{"code","message","message_en","details","request_id"}}` دارند و شناسه در Header `X-Request-ID` نیز تکرار می‌شود. OpenAPI در `/openapi.json` و Swagger UI در `/docs` در دسترس است.
+
+## Pagination، فیلتر و توکن‌های کوتاه‌مدت
+
+مسیرهای خواندنی `/products`، `/pages`، `/portfolio`، `/media`، `/content` و `/activity` پارامترهای Query می‌پذیرند. معادل MCP/POST همان ابزارهای `list_*` است:
+
+```bash
+curl -G http://SERVER_IP:9900/api/agent/v1/products \
+  -H "Authorization: Bearer $HJF_AGENT_TOKEN" \
+  --data-urlencode 'limit=20' --data-urlencode 'sort=updated_at' \
+  --data-urlencode 'order=desc' --data-urlencode 'status=published'
+```
+
+پاسخ صفحه‌بندی‌شده شامل `data` و `pagination.total/next_cursor/has_more/limit` است. مقدار `limit` بین ۱ تا ۱۰۰ است و `next_cursor` را بدون تغییر در درخواست بعد بفرستید. حذف کامل پارامترهای صفحه‌بندی برای سازگاری موقت فهرست محدود قدیمی را با Header `Deprecation: true` برمی‌گرداند.
+
+برای دریافت JWT پانزده‌دقیقه‌ای و Refresh Token چرخشی:
+
+```bash
+curl -X POST http://SERVER_IP:9900/api/agent/v1/auth/token \
+  -H "Authorization: Bearer $HJF_AGENT_TOKEN"
+```
+
+سپس Access Token را با Bearer ارسال کنید. `/auth/me` scopes فعال را نشان می‌دهد. `/auth/refresh` هر Refresh Token را یک‌بارمصرف می‌کند و توکن جایگزین می‌دهد. `/auth/rotate` اعتبار `hjf_` را عوض و `/auth/revoke` اتصال را غیرفعال می‌کند.
+
+## آپلود و رسانه محصول
+
+`POST /api/agent/v1/media/upload` فایل JPEG/PNG/WebP/SVG تا ۵MB را با بررسی Magic Bytes می‌پذیرد. خروجی تصویر WebP و variantهای ۲۵۶/۵۱۲/۱۰۲۴ پیکسلی است. فیلدهای `product_id`، `kind=logo|cover|gallery|mockup` و `alt_text` اختیاری‌اند. آپلود فقط رسانه می‌سازد؛ برای تغییر عمومی لوگو یا کاور، `set_product_logo` یا `set_product_cover` و در صورت سیاست اتصال، تأیید مدیر لازم است. حذف رسانه متصل `409 conflict` می‌دهد و حذف محصول رسانه‌های آن را soft-delete می‌کند.
+
+برای عملیات `create_*` در REST مقدار UUID در `Idempotency-Key` ارسال کنید. تکرار همان کلید و Body پاسخ قبلی را برمی‌گرداند؛ تغییر Body با همان کلید `409 conflict` است. کلاینت‌های قدیمی موقتاً بدون کلید پشتیبانی و با Deprecation هشدار داده می‌شوند؛ پیش از حذف این دوره سازگاری، کلید الزامی خواهد شد.
 
 ## اجرای MCP
 
@@ -171,6 +201,8 @@ asyncio.run(main())
 | `content.read` | محتوای عمومی و بخش‌ها |
 | `content.manage` | ویرایش محتوای ثبت‌شده |
 | `media.read` | فهرست و جزئیات رسانه |
+| `media.upload` | آپلود تصویر اعتبارسنجی‌شده |
+| `media.manage` | اتصال/جدا کردن و انتخاب لوگو، کاور و گالری؛ عملیات حساس |
 | `media.delete` | حذف رسانه، عملیات حساس |
 | `settings.read` | تنظیمات عمومی برند |
 | `reports.read` | آمار و گزارش تغییرات |
@@ -183,17 +215,17 @@ asyncio.run(main())
 همه Schemaها از `/tools` و `tools/list` قابل دریافت‌اند؛ لیست ثابت زیر برای انتخاب مجوز است:
 
 - محصول/دسته: `list_products`، `get_product`، `create_product`، `update_product`، `archive_product`، `delete_product`، `get_product_categories`، `create_product_category`، `update_product_category`.
-- صفحه: `list_pages`، `get_page`، `create_page`، `update_page`، `preview_page`، `publish_page`، `unpublish_page`، `archive_page`، `get_page_public_url`.
+- صفحه: `list_pages`، `get_page`، `create_page`، `update_page`، `preview_page`، `render_page_preview`، `publish_page`، `unpublish_page`، `archive_page`، `get_page_public_url`.
 - منو: `list_menus`، `get_menu`، `add_menu_item`، `update_menu_item`، `remove_menu_item`، `reorder_menu_items`.
 - نمونه‌کار: `list_portfolio_items`، `get_portfolio_item`، `create_portfolio_item`، `update_portfolio_item`، `archive_portfolio_item`.
-- محتوا/رسانه: `get_site_content`، `list_content_sections`، `update_site_content`، `update_content_section`، `list_media`، `get_media_details`، `delete_media`.
+- محتوا/رسانه: `get_site_content`، `list_content_sections`، `update_site_content`، `update_content_section`، `list_media`، `get_media_details`، `attach_media_to_product`، `detach_media_from_product`، `set_product_logo`، `set_product_cover`، `list_product_media`، `get_product_media`، `delete_media`.
 - گزارش/Audit: `get_site_overview`، `get_site_statistics`، `get_published_pages`، `get_draft_pages`، `get_product_statistics`، `get_recent_changes`، `get_agent_activity_logs`.
 
-Resourceهای امن `site://overview` و `site://tools` و Prompt راهنمای `safe_content_manager` نیز در MCP وجود دارند. Resource اول به `reports.read` نیاز دارد.
+Resourceهای امن `site://overview`، `site://tools`، `hjf://products/{product_id}` و `hjf://pages/{page_id}` در MCP وجود دارند. Promptهای آماده `summarize_product`، `audit_product`، `generate_black_friday_card` و `safe_content_manager` نیز با Client رسمی قابل دریافت‌اند. کشف سرویس از `/.well-known/mcp.json` انجام می‌شود و Rate Limit مستقل MCP با Headerهای `X-MCP-RateLimit-*` گزارش می‌شود. پاسخ‌های عملیاتی همچنان MCP استاندارد/Streamable HTTP هستند.
 
 ## تأیید انسانی و Audit
 
-انتشار، لغو انتشار، بایگانی و حذف حساس طبق سیاست اتصال Pending می‌شوند. رکورد Pending فقط یک بار قابل بررسی است. اجرای نهایی دوباره از لایه ابزار و با نام مدیر تأییدکننده ثبت می‌شود. رد کردن هیچ تغییری روی محتوا نمی‌دهد.
+انتشار، لغو انتشار، بایگانی، تغییر رسانه و حذف حساس طبق سیاست اتصال Pending می‌شوند. ویرایش صفحه Draft مستقیم است؛ ویرایش هر صفحه Published نیز تأیید لازم دارد. وجود رکورد و داشتن تغییر واقعی پیش از ساخت درخواست بررسی می‌شود؛ شناسه ناموجود `404` و Update بدون فیلد `400 no_changes` است. رکورد Pending فقط یک بار قابل بررسی است. اجرای نهایی دوباره از لایه ابزار و با نام مدیر تأییدکننده ثبت می‌شود. رد کردن هیچ تغییری روی محتوا نمی‌دهد.
 
 `/admin/agent-activity` بر اساس Agent، نوع عملیات و وضعیت قابل فیلتر است. زمان، ابزار، نوع رکورد، نتیجه خلاصه، خطای ساختاریافته و تأییدکننده ثبت می‌شود. Payload کامل و Token در Log ذخیره نمی‌شود.
 
