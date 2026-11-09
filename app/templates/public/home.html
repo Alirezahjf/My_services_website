@@ -1,0 +1,64 @@
+{% extends 'base.html' %}{% from 'public/_macros.html' import icon,product_card,content_page_links  with context%}
+{% block body_class %}home-page{% endblock %}
+{% block content %}
+{% set hero=sections.get('hero') %}
+<section class="hero">
+  <div class="hero-noise" aria-hidden="true"></div><div class="hero-glow hero-glow-one" aria-hidden="true"></div><div class="hero-glow hero-glow-two" aria-hidden="true"></div>
+  <div class="container hero-grid">
+    <div class="hero-copy" data-page-enter>
+      <div class="hero-kicker"><span class="pulse-dot"></span> راهکارهای نرم‌افزاری مبتنی بر پروژه‌های واقعی</div>
+      <h1>{{ hero.title if hero else 'نرم‌افزار که کار را واقعاً ساده‌تر می‌کند' }}</h1>
+      <p class="hero-lead">{{ hero.subtitle if hero else '' }}</p>
+      <div class="hero-description">{{ hero.body|safe_html if hero else '' }}{{ content_page_links(hero) }}</div>
+      <div class="hero-actions"><a href="{{ url_for('public.products') }}" class="button button-accent">مشاهده محصولات <span>↙</span></a><a href="{{ url_for('public.consultation') }}" class="button button-ghost">درخواست مشاوره <span>←</span></a></div>
+      <div class="hero-proof"><div><strong data-count="{{ repository_count }}">{{ repository_count|fa_num }}</strong><span>مخزن واقعی بررسی‌شده</span></div><i></i><div><strong data-count="{{ category_count }}">{{ category_count|fa_num }}</strong><span>حوزه تخصصی نرم‌افزار</span></div><i></i><div><strong>۱۰۰٪</strong><span>شفافیت در پیش‌نیازها</span></div></div>
+    </div>
+    <div class="hero-visual" data-page-enter data-parallax="0.035" aria-label="نمای مفهومی چرخه توسعه راهکار">
+      <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+      <div class="system-card">
+        <div class="system-card-header"><div class="window-dots"><i></i><i></i><i></i></div><span>WORKFLOW / OVERVIEW</span><span class="live-label"><b></b> ONLINE</span></div>
+        <div class="system-card-body">
+          <div class="workflow-head"><div><small>مسیر راهکار</small><strong>از مسئله تا نرم‌افزار</strong></div><span class="system-icon">{{ icon('workflow',24) }}</span></div>
+          <div class="workflow-map">
+            <div class="workflow-node node-input"><span class="node-icon">{{ icon('file',20) }}</span><div><small>ورودی</small><strong>نیاز کسب‌وکار</strong></div><b>۰۱</b></div>
+            <div class="flow-line"><i></i><i></i><i></i></div>
+            <div class="workflow-node node-ai"><span class="node-icon">{{ icon('brain',20) }}</span><div><small>پردازش</small><strong>تحلیل و انتخاب راهکار</strong></div><b>۰۲</b></div>
+            <div class="flow-branches"><span></span><span></span><span></span></div>
+            <div class="output-nodes"><div><span>{{ icon('ai',18) }}</span><small>هوش مصنوعی</small></div><div><span>{{ icon('workflow',18) }}</span><small>اتوماسیون</small></div><div><span>{{ icon('layers',18) }}</span><small>نرم‌افزار</small></div></div>
+          </div>
+          <div class="system-status"><span><i></i> قابلیت‌ها با کد واقعی تأیید می‌شوند</span>{{ icon('check',18) }}</div>
+        </div>
+      </div>
+      <div class="floating-chip chip-top"><span>{{ icon('check',18) }}</span><div><strong>Verified Code</strong><small>بررسی مستقیم مخزن</small></div></div>
+      <div class="floating-chip chip-bottom"><span>{{ icon('server',18) }}</span><div><strong>Ready to Evolve</strong><small>قابل سفارشی‌سازی</small></div></div>
+    </div>
+  </div>
+  <div class="hero-bottom container"><span>برای دیدن راهکارها ادامه دهید</span><i></i><span>DISCOVER SOLUTIONS</span></div>
+</section>
+
+<section class="section categories-section" id="categories"><div class="container">
+  <div class="section-heading"><div><span class="eyebrow">حوزه‌های تخصصی</span><h2>راهکار مناسب، از دسته درست</h2></div><p>هر محصول بر اساس ماهیت واقعی‌اش دسته‌بندی شده است؛ از ابزار توسعه‌دهنده تا سامانه آماده معرفی.</p></div>
+  <div class="category-grid">{% for category in categories %}<a class="category-card reveal" href="{{ url_for('public.products',category=category.slug) }}"><div class="category-icon category-icon-{{ loop.index }}">{{ icon(category.icon,26) }}</div><div class="category-content"><h3>{{ category.name }}</h3><p>{{ category.description }}</p><div><span>{{ category.published_count|fa_num }} محصول منتشرشده</span><b>↙</b></div></div></a>{% endfor %}</div>
+</div></section>
+
+<section class="section featured-section"><div class="container">
+  <div class="section-heading"><div><span class="eyebrow">منتخب محصولات</span><h2>فناوری، به زبان نتیجه</h2></div><div class="heading-side"><p>قابلیت‌هایی که در کد وجود دارند؛ با توضیح کاربرد واقعی و محدودیت‌های صریح.</p><a class="text-link" href="{{ url_for('public.products') }}">مشاهده همه محصولات <span>←</span></a></div></div>
+  {% if products %}<div class="product-grid">{% for product in products %}{{ product_card(product) }}{% endfor %}</div>{% else %}<div class="empty-state"><h3>محصولات پس از تأیید نهایی اینجا نمایش داده می‌شوند.</h3></div>{% endif %}
+</div></section>
+
+<section class="section why-section"><div class="container why-grid">
+  <div class="why-sticky"><span class="eyebrow eyebrow-light">رویکرد ما</span><h2>{{ sections.get('why_title').title if sections.get('why_title') else 'چرا این مجموعه؟' }}</h2><p>{{ sections.get('why_title').subtitle if sections.get('why_title') else '' }}</p><a class="button button-ghost" href="{{ url_for('public.about') }}">آشنایی با رویکرد ما ←</a>{{ content_page_links(sections.get('why_title')) }}</div>
+  {% set why=sections.get('why') %}<div class="why-content"><div class="why-intro"><span>{{ icon('layers',28) }}</span><h3>{{ why.title if why else '' }}</h3><p>{{ why.subtitle if why else '' }}</p></div>{{ why.body|safe_html if why else '' }}{{ content_page_links(why) }}<div class="trust-note">{{ icon('check',22) }}<p>بدون مشتری ساختگی، آمار غیرواقعی یا ادعای تأییدنشده.</p></div></div>
+</div></section>
+
+<section class="section portfolio-preview"><div class="container">
+  <div class="section-heading"><div><span class="eyebrow">خروجی واقعی</span><h2>{{ sections.get('portfolio_title').title if sections.get('portfolio_title') else 'نمونه‌کارها' }}</h2></div><p>{{ sections.get('portfolio_title').subtitle if sections.get('portfolio_title') else '' }}</p></div>{{ content_page_links(sections.get('portfolio_title')) }}
+  {% if portfolios %}<div class="portfolio-grid">{% for item in portfolios %}<a class="portfolio-card" href="{{ url_for('public.portfolio_detail',slug=item.slug) }}">{% if item.cover_path %}<img src="{{ item.cover_path|media_url }}" alt="{{ item.title }}" loading="lazy">{% else %}<div class="media-placeholder">{{ icon('layers',34) }}</div>{% endif %}<div><h3>{{ item.title }}</h3><p>{{ item.summary }}</p></div></a>{% endfor %}</div>{% else %}<div class="editorial-empty"><span>{{ icon('file',30) }}</span><div><h3>رسانه‌ای بدون ساختن نمونه‌کار ساختگی</h3><p>تصاویر، ویدئوها و PDFهای واقعی پس از ثبت مدیر در این بخش قرار می‌گیرند.</p></div><a class="button button-secondary" href="{{ url_for('public.products') }}">بررسی محصولات</a></div>{% endif %}
+</div></section>
+
+<section class="section process-section"><div class="container"><div class="section-heading centered"><div><span class="eyebrow">مسیر همکاری</span><h2>از یک گفت‌وگو تا راهکار قابل استفاده</h2></div><p>مراحل مشخص، بدون ابهام در خروجی و پیش‌نیازها.</p></div><div class="process-grid">{% for step in steps %}<article class="process-step reveal"><span class="step-number">{{ '%02d'|format(loop.index) }}</span><div class="step-line"></div><h3>{{ step.title }}</h3><p>{{ step.description }}</p></article>{% endfor %}</div></div></section>
+
+<section class="section faq-section"><div class="container faq-layout"><div class="faq-aside"><span class="eyebrow">پاسخ روشن</span><h2>{{ sections.get('faq_title').title if sections.get('faq_title') else 'پرسش‌های پرتکرار' }}</h2><p>{{ sections.get('faq_title').subtitle if sections.get('faq_title') else '' }}</p><a href="{{ url_for('public.contact') }}" class="text-link">پرسش دیگری دارید؟ ←</a>{{ content_page_links(sections.get('faq_title')) }}</div><div class="faq-list">{% for faq in faqs %}<details class="faq-item" {{ 'open' if loop.first }}><summary><span>{{ '%02d'|format(loop.index) }}</span><strong>{{ faq.question }}</strong><i></i></summary><div class="faq-answer"><p>{{ faq.answer }}</p></div></details>{% endfor %}</div></div></section>
+
+{% set cta=sections.get('cta') %}<section class="cta-section"><div class="container"><div class="cta-card"><div class="cta-decoration" aria-hidden="true"></div><div><span class="eyebrow eyebrow-light">قدم بعدی</span><h2>{{ cta.title if cta else '' }}</h2><p>{{ cta.subtitle if cta else '' }}</p>{{ cta.body|safe_html if cta else '' }}{{ content_page_links(cta) }}</div><div class="cta-actions"><a class="button button-light" href="{{ url_for('public.consultation') }}">ثبت درخواست مشاوره <span>↙</span></a><a class="button button-ghost" href="{{ url_for('public.custom_solution') }}">سفارش راهکار اختصاصی</a></div></div></div></section>
+{% endblock %}

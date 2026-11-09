@@ -1,0 +1,55 @@
+{% macro icon(name, size=22) %}
+<svg class="icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{% if name in ['ai','brain','sparkles'] %}<path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="4"/>
+{% elif name in ['search'] %}<circle cx="10.8" cy="10.8" r="7"/><path d="m16 16 5 5"/>
+{% elif name in ['chart'] %}<path d="M4 20V10m5 10V4m5 16v-7m5 7V7M2 20h20"/>
+{% elif name in ['workflow','layers'] %}<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/><path d="M10 6.5h5a2 2 0 0 1 2 2V14M6.5 10v4a2 2 0 0 0 2 2H14"/>
+{% elif name in ['server'] %}<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/>
+{% elif name in ['arrow'] %}<path d="M5 12h14m-6-6 6 6-6 6"/>
+{% elif name in ['external'] %}<path d="M14 4h6v6m0-6-9 9"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/>
+{% elif name in ['file'] %}<path d="M6 2h8l4 4v16H6zM14 2v5h5M9 12h6m-6 4h6"/>
+{% else %}<path d="m5 12 4 4L19 6"/>{% endif %}
+</svg>
+{% endmacro %}
+
+{% macro feature_status(status) %}{% set labels={'verified':'تأییدشده در کد','implemented':'پیاده‌سازی‌شده','development':'در حال توسعه','planned':'برنامه‌ریزی‌شده','api_required':'نیازمند API','platform_approval':'نیازمند تأیید پلتفرم','review':'نیازمند بررسی فنی','unsupported':'پشتیبانی نمی‌شود'} %}<span class="status-badge feature-status-{{ status }}">{{ labels.get(status,status) }}</span>{% endmacro %}
+
+{% macro product_card(product) %}
+<article class="product-card reveal" style="--product-accent:{{ product.accent_color or '#6758e8' }}">
+  <a href="{{ url_for('public.product_detail',slug=product.slug) }}" class="product-card-link" aria-label="مشاهده {{ product.name }}">
+    <div class="product-card-top">
+      <div class="product-logo-wrap"><img src="{{ (product.logo_path|media_url) if product.logo_path else url_for('static',filename='img/product-placeholder.svg') }}" alt="لوگوی {{ product.name }}" class="product-logo" width="56" height="56" loading="lazy"></div>
+      <div class="product-card-meta"><span class="pill pill-soft">{{ product.category.name if product.category else 'راهکار نرم‌افزاری' }}</span><span class="product-type">{{ 'معرفی اولیه · در حال توسعه' if product.commercial_status=='concept' else {'ai':'هوش مصنوعی','automation':'اتوماسیون','library':'کتابخانه','infrastructure':'زیرساخت','service':'سرویس','software':'نرم‌افزار'}.get(product.product_type,'نرم‌افزار') }}</span></div>
+    </div>
+    <div class="product-card-body"><h3>{{ product.name }}</h3><p class="product-tagline">{{ product.tagline }}</p><p>{{ product.short_description }}</p></div>
+    {% set verified_features=product.features|selectattr('is_published')|selectattr('verification_status','equalto','verified')|list %}
+    {% if verified_features %}<ul class="mini-features">{% for feature in verified_features[:3] %}<li>{{ icon('check',16) }}<span>{{ feature.title }}</span></li>{% endfor %}</ul>{% endif %}
+    <div class="product-card-footer"><span>مشاهده جزئیات و پیش‌نیازها</span><span class="round-arrow" aria-hidden="true">↙</span></div>
+  </a>
+</article>
+{% endmacro %}
+
+{% macro render_field(field, placeholder='', rows=5, help='') %}
+<div class="form-group {{ 'has-error' if field.errors }}">
+  {{ field.label }}
+  {% if field.type in ['BooleanField'] %}<label class="check-label">{{ field() }}<span>{{ field.label.text }}</span></label>
+  {% elif field.type in ['TextAreaField'] %}{{ field(rows=rows, placeholder=placeholder, class='form-control') }}
+  {% elif field.type in ['SelectField','SelectMultipleField'] %}{{ field(class='form-control select-control') }}
+  {% elif field.type in ['FileField','MultipleFileField'] %}{{ field(class='form-control file-control',accept='.jpg,.jpeg,.png,.webp,.gif,.svg,.pdf,.mp4,.webm,.ogg',multiple=(field.type=='MultipleFileField')) }}
+  {% elif field.type in ['HiddenField'] %}{{ field() }}
+  {% else %}{{ field(placeholder=placeholder, class='form-control') }}{% endif %}
+  {% if help %}<small class="form-help">{{ help }}</small>{% endif %}
+  {% for error in field.errors %}<small class="field-error">{{ error }}</small>{% endfor %}
+</div>
+{% endmacro %}
+
+{% macro page_hero(eyebrow,title,subtitle) %}
+<section class="page-hero"><div class="container page-hero-inner"><div><span class="eyebrow">{{ eyebrow }}</span><h1>{{ title }}</h1><p>{{ subtitle }}</p></div><div class="page-hero-orb" aria-hidden="true"></div></div></section>
+{% endmacro %}
+
+{% macro content_page_links(section) %}
+  {% if section %}
+    {% set published_links=linked_pages(section.id) %}
+    {% if published_links %}<nav class="content-linked-pages" aria-label="صفحه‌های مرتبط با {{ section.title }}"><strong>صفحه‌های مرتبط</strong><div>{% for page in published_links|sort(attribute='menu_order') %}<a href="{{ url_for('public.custom_page',page_path=page.slug) }}"><span>{{ page.menu_title or page.title }}</span>{% if page.summary %}<small>{{ page.summary }}</small>{% endif %}<b aria-hidden="true">↙</b></a>{% endfor %}</div></nav>{% endif %}
+  {% endif %}
+{% endmacro %}

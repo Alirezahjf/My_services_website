@@ -1,0 +1,41 @@
+{% extends 'admin/base.html' %}
+{% from 'admin/_macros.html' import delete_button %}
+{% block title %}محتوای صفحات{% endblock %}
+{% block page_subtitle %}بخش‌های قالب و صفحه‌های اختصاصی متصل به هر بخش؛ وضعیت انتشار و مسیر عمومی در یک نمای یکپارچه{% endblock %}
+{% block actions %}<a class="admin-primary" href="{{ url_for('admin.content_edit') }}">＋ بخش محتوایی</a><a class="admin-secondary" href="{{ url_for('admin.custom_page_edit') }}">＋ صفحه اختصاصی</a>{% endblock %}
+{% block content %}
+<div class="media-help">شناسه‌های اصلی: home/hero، home/why، home/why_title، home/portfolio_title، home/faq_title، home/cta، about/main، services/main، contact/main، privacy/main، terms/main. نمایش عمومی صفحه متصل نیازمند استفاده آن بخش در قالب و انتشار هر دو مورد است.</div>
+<section class="admin-panel">
+  <div class="table-wrap"><table class="admin-table">
+    <thead><tr><th>صفحه / بخش</th><th>عنوان</th><th>وضعیت</th><th>صفحه‌های اختصاصی زیرمجموعه</th><th>عملیات</th></tr></thead>
+    <tbody>
+    {% for item in contents %}
+      <tr>
+        <td><span class="content-key" dir="ltr">{{ item.page_key }}/{{ item.section_key }}</span><small class="block-text">{{ item.updated_at|fa_date }}</small></td>
+        <td><strong>{{ item.title }}</strong><small class="block-text">{{ item.subtitle }}</small></td>
+        <td><span class="admin-status status-{{ 'published' if item.is_published else 'draft' }}">{{ 'فعال' if item.is_published else 'مخفی' }}</span></td>
+        <td>
+          {% for page in custom_pages if page.parent_content_id==item.id %}
+            <div class="content-child-page">
+              <a href="{{ url_for('admin.custom_page_edit',page_id=page.id) }}"><strong>{{ page.title }}</strong></a>
+              <a class="public-path" href="{{ '/'+page.slug }}" target="_blank" dir="ltr">/{{ page.slug }}</a>
+              <span class="admin-status status-{{ page.status }}">{{ {'draft':'پیش‌نویس','published':'منتشرشده','unpublished':'از انتشار خارج','archived':'بایگانی'}[page.status] }}</span>
+              {% if page.css_content or page.js_content %}<small>CSS/JS اختصاصی</small>{% endif %}
+            </div>
+          {% else %}<small class="muted-text">صفحه‌ای متصل نشده است.</small>{% endfor %}
+        </td>
+        <td><div class="table-actions"><a href="{{ url_for('admin.content_edit',content_id=item.id) }}">ویرایش بخش</a><a href="{{ url_for('admin.custom_page_edit',parent_content_id=item.id) }}">＋ صفحه زیرمجموعه</a>{{ delete_button(url_for('admin.content_delete',content_id=item.id)) }}</div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+<section class="admin-panel">
+  <div class="panel-head"><h2>صفحه‌های مستقل و بدون بخش والد</h2><a href="{{ url_for('admin.custom_pages') }}">مدیریت کامل صفحه‌ساز</a></div>
+  <div class="table-wrap"><table class="admin-table"><thead><tr><th>صفحه</th><th>آدرس</th><th>وضعیت</th><th>کد اختصاصی</th><th></th></tr></thead><tbody>
+  {% for page in custom_pages if not page.parent_content_id %}
+    <tr><td>{{ page.title }}</td><td dir="ltr">/{{ page.slug }}</td><td>{{ page.status }}</td><td>{{ 'CSS/JS' if page.css_content or page.js_content else '—' }}</td><td><a href="{{ url_for('admin.custom_page_edit',page_id=page.id) }}">ویرایش</a></td></tr>
+  {% else %}<tr><td colspan="5"><div class="admin-empty">همه صفحه‌های اختصاصی به یک بخش متصل‌اند یا هنوز صفحه‌ای ساخته نشده است.</div></td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

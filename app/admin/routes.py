@@ -1,0 +1,1178 @@
+"""Authenticated content management. All mutations use POST and CSRF protection."""
+import csv
+import io
+import secrets
+from datetime import datetime
+from functools import wraps
+import bleach
+from flask import Blueprint, Response, abort, flash, g, redirect, render_template, request, url_for
+from flask_login import current_user, login_required, login_user, logout_user
+from sqlalchemy import func, or_
+from app.extensions import db, limiter
+from app.models import (ActivityLog, AdminUser, Category, ContactMessage, FAQ, GitHubSyncLog,
+                        AgentActivity, AgentApproval, AgentConnection, CustomPage, Lead, MenuItem, PageContent, Portfolio,
+                        PortfolioMedia, PlatformConnector, Product, ProductFeature, ProductMedia, ProductModule, ProductPortfolio,
+                        ProductRepository, RepositoryAnalysis, Service, SiteSetting, SocialLink, Tag, WorkflowStep)
+from app.github_sync.service import sync_repository
+from app.services.activity import log_activity
+from app.services.media_service import MediaValidationError, delete_upload, save_upload
+from app.services.utils import client_ip_hash, slugify, split_lines
+from .forms import (CategoryForm, ConnectorForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LoginForm,
+                    AgentConnectionForm, CustomPageForm, MediaForm, MenuItemForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, PortfolioMediaEditForm, ProductForm, ProductMediaEditForm,
+                    ServiceForm, SettingsForm, SocialForm, WorkflowForm)
+from app.services.page_service import PageValidationError, apply_page_data, page_dict, set_page_status
+from app.services.agent_service import AgentToolError, TOOLS, apply_menu_data, execute_tool, issue_token
+
+bp = Blueprint("admin", __name__, url_prefix="/admin")
+ALLOWED_HTML_TAGS = ["p", "br", "strong", "b", "em", "i", "ul", "ol", "li", "h2", "h3", "h4", "blockquote", "a", "code", "pre"]
+ALLOWED_HTML_ATTRS = {"a": ["href", "title", "rel"]}
+
+
+def superadmin_required(view):
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not current_user.is_superadmin:
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def unique_slug(model, value, current_id=None):
+    base = slugify(value) or "item"
+    candidate, number = base, 2
+    while True:
+        query = model.query.filter_by(slug=candidate)
+        if current_id:
+            query = query.filter(model.id != current_id)
+        if not query.first():
+            return candidate
+        candidate = f"{base}-{number}"
+        number += 1
+
+
+def products_choices(empty=None):
+    rows = Product.query.order_by(Product.name).all()
+    return ([empty] if empty else []) + [(p.id, p.name) for p in rows]
+
+
+def save_setting(key, value, group="brand"):
+    row = SiteSetting.query.filter_by(key=key).first()
+    if not row:
+        row = SiteSetting(key=key, group_name=group)
+        db.session.add(row)
+    row.value = value or ""
+    row.group_name = group
+
+
+def clean_html(value):
+    return bleach.clean(value or "", tags=ALLOWED_HTML_TAGS, attributes=ALLOWED_HTML_ATTRS, protocols=["http", "https", "mailto"], strip=True)
+
+
+@bp.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute;20 per hour")
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("admin.dashboard"))
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = AdminUser.query.filter_by(username=form.username.data.strip()).first()
+        if user and user.is_active and user.check_password(form.password.data):
+            login_user(user, fresh=True)
+            user.last_login_at = datetime.utcnow()
+            log_activity("login", "AdminUser", user.id, "ورود موفق")
+            db.session.commit()
+            next_url = request.args.get("next", "")
+            if next_url.startswith("/admin") and not next_url.startswith("//"):
+                return redirect(next_url)
+            return redirect(url_for("admin.dashboard"))
+        flash("نام کاربری یا رمز عبور نادرست است.", "error")
+    return render_template("admin/login.html", form=form)
+
+
+@bp.post("/logout")
+@login_required
+def logout():
+    log_activity("logout", "AdminUser", current_user.id)
+    db.session.commit()
+    logout_user()
+    flash("با موفقیت خارج شدید.", "success")
+    return redirect(url_for("admin.login"))
+
+
+@bp.get("/")
+@login_required
+def dashboard():
+    stats = {
+        "products": Product.query.count(),
+        "published": Product.query.filter_by(status="published").count(),
+        "drafts": Product.query.filter(Product.status.in_(["draft", "review", "development"])).count(),
+        "categories": Category.query.count(), "portfolios": Portfolio.query.count(),
+        "messages": ContactMessage.query.count(), "leads": Lead.query.count(),
+        "new_leads": Lead.query.filter_by(status="new").count(),
+    }
+    latest_leads = Lead.query.order_by(Lead.created_at.desc()).limit(6).all()
+    latest_products = Product.query.order_by(Product.updated_at.desc()).limit(6).all()
+    last_sync = GitHubSyncLog.query.order_by(GitHubSyncLog.created_at.desc()).first()
+    return render_template("admin/dashboard.html", stats=stats, latest_leads=latest_leads,
+                           latest_products=latest_products, last_sync=last_sync)
+
+
+@bp.route("/password", methods=["GET", "POST"])
+@login_required
+def password():
+    form = PasswordForm()
+    if form.validate_on_submit():
+        if not current_user.check_password(form.current_password.data):
+            form.current_password.errors.append("رمز عبور فعلی نادرست است.")
+        else:
+            current_user.set_password(form.new_password.data)
+            log_activity("password_change", "AdminUser", current_user.id)
+            db.session.commit()
+            flash("رمز عبور تغییر کرد.", "success")
+            return redirect(url_for("admin.dashboard"))
+    return render_template("admin/password.html", form=form)
+
+
+@bp.get("/products")
+@login_required
+def products():
+    q = (request.args.get("q") or "").strip()
+    status = request.args.get("status", "")
+    query = Product.query
+    if q:
+        query = query.filter(or_(Product.name.ilike(f"%{q}%"), Product.repository_name.ilike(f"%{q}%")))
+    if status in Product.STATUSES:
+        query = query.filter_by(status=status)
+    rows = query.order_by(Product.position, Product.id).all()
+    return render_template("admin/products.html", products=rows, q=q, status=status, delete_form=DeleteForm())
+
+
+def populate_product_form(form, product=None):
+    category_choices = [(c.id, c.name) for c in Category.query.order_by(Category.position).all()]
+    form.category_id.choices = [(0, "بدون دسته‌بندی")] + category_choices
+    form.category_ids.choices = category_choices
+    if product:
+        form.repository_url.data = product.public_repository_url
+        form.repository_enabled.data = product.repository.is_enabled if product.repository else product.repository_enabled
+        form.category_ids.data = [c.id for c in product.additional_categories]
+        form.platforms_text.data = "، ".join(product.platforms or [])
+        form.use_cases_text.data = "\n".join(product.use_cases or [])
+        form.target_audience_text.data = "\n".join(product.target_audience or [])
+        form.prerequisites_text.data = "\n".join(product.prerequisites or [])
+        form.limitations_text.data = "\n".join(product.limitations or [])
+        form.technologies_text.data = "\n".join(product.technologies or [])
+        form.tags_text.data = "، ".join(t.name for t in product.tags)
+
+
+def apply_product_form(form, product):
+    fields = ["name", "repository_name", "tagline", "short_description", "medium_description",
+              "full_description", "value_proposition", "problem_statement", "product_type",
+              "status", "development_status", "confidence", "origin_type", "commercial_status",
+              "repository_enabled", "repository_url", "integration_status", "ai_enabled",
+              "automation_enabled", "demo_available", "pricing_visibility", "product_version",
+              "release_date", "position", "is_featured", "show_on_home", "seo_title", "seo_description"]
+    for field in fields:
+        setattr(product, field, getattr(form, field).data)
+    product.category_id = form.category_id.data or None
+    product.additional_categories = Category.query.filter(Category.id.in_(form.category_ids.data or [])).all()
+    product.platforms = [x.strip() for x in (form.platforms_text.data or "").replace("،", ",").split(",") if x.strip()]
+    product.accent_color = form.accent_color.data if __import__("re").fullmatch(r"#[0-9a-fA-F]{6}", form.accent_color.data or "") else "#6d5dfc"
+    product.use_cases = split_lines(form.use_cases_text.data)
+    product.target_audience = split_lines(form.target_audience_text.data)
+    product.prerequisites = split_lines(form.prerequisites_text.data)
+    product.limitations = split_lines(form.limitations_text.data)
+    product.technologies = split_lines(form.technologies_text.data)
+    tag_names = [x.strip() for x in (form.tags_text.data or "").replace("،", ",").split(",") if x.strip()]
+    tags = []
+    for name in tag_names[:20]:
+        tag_slug = unique_slug(Tag, name)
+        tag = Tag.query.filter(db.func.lower(Tag.name) == name.lower()).first()
+        if not tag:
+            tag = Tag(name=name, slug=tag_slug)
+            db.session.add(tag)
+        tags.append(tag)
+    product.tags = tags
+
+
+def sync_primary_repository(product):
+    """Attach or update the optional primary repository without inventing one."""
+    if product.repository_name:
+        if not product.repository:
+            product.repository = ProductRepository(owner="Alirezahjf", name=product.repository_name)
+        product.repository.name = product.repository_name
+        product.repository.is_enabled = bool(product.repository_enabled)
+    elif product.repository:
+        product.repository.is_enabled = False
+        product.repository_enabled = False
+
+
+@bp.route("/products/new", methods=["GET", "POST"])
+@login_required
+def product_new():
+    form = ProductForm()
+    populate_product_form(form)
+    if form.validate_on_submit():
+        product = Product(slug=unique_slug(Product, form.slug.data or form.name.data))
+        apply_product_form(form, product)
+        try:
+            if form.logo.data:
+                product.logo_path = save_upload(form.logo.data, "image")["path"]
+            if form.cover.data:
+                product.cover_path = save_upload(form.cover.data, "image")["path"]
+            db.session.add(product)
+            sync_primary_repository(product)
+            log_activity("create", "Product", detail=product.name)
+            db.session.commit()
+            flash("محصول ذخیره شد. برای نمایش عمومی، وضعیت را «منتشرشده» قرار دهید.", "success")
+            return redirect(url_for("admin.product_edit", product_id=product.id))
+        except (MediaValidationError, OSError) as exc:
+            db.session.rollback()
+            flash(str(exc) or "ذخیره فایل انجام نشد.", "error")
+    return render_template("admin/product_form.html", form=form, product=None, title="افزودن محصول")
+
+
+@bp.route("/products/<int:product_id>/edit", methods=["GET", "POST"])
+@login_required
+def product_edit(product_id):
+    product = Product.query.get_or_404(product_id)
+    form = ProductForm(obj=product)
+    populate_product_form(form, product if request.method == "GET" else None)
+    if form.validate_on_submit():
+        product.slug = unique_slug(Product, form.slug.data or form.name.data, product.id)
+        apply_product_form(form, product)
+        try:
+            if form.logo.data:
+                old = product.logo_path
+                product.logo_path = save_upload(form.logo.data, "image")["path"]
+                delete_upload(old)
+            if form.cover.data:
+                old = product.cover_path
+                product.cover_path = save_upload(form.cover.data, "image")["path"]
+                delete_upload(old)
+            sync_primary_repository(product)
+            log_activity("update", "Product", product.id, product.name)
+            db.session.commit()
+            flash("تغییرات محصول ذخیره شد.", "success")
+            return redirect(url_for("admin.product_edit", product_id=product.id))
+        except (MediaValidationError, OSError) as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+    return render_template("admin/product_form.html", form=form, product=product, title=f"ویرایش {product.name}")
+
+
+@bp.get("/products/<int:product_id>/preview")
+@login_required
+def product_preview(product_id):
+    product = Product.query.get_or_404(product_id)
+    return render_template("public/product_detail.html", product=product, related=[], portfolios=[], form=None, admin_preview=True)
+
+
+@bp.post("/products/<int:product_id>/status")
+@login_required
+def product_status(product_id):
+    product = Product.query.get_or_404(product_id)
+    status = request.form.get("status")
+    if status not in Product.STATUSES:
+        abort(400)
+    product.status = status
+    log_activity("status", "Product", product.id, status)
+    db.session.commit()
+    flash("وضعیت محصول تغییر کرد.", "success")
+    return redirect(request.referrer or url_for("admin.products"))
+
+
+@bp.post("/products/<int:product_id>/delete")
+@login_required
+def product_delete(product_id):
+    product = Product.query.get_or_404(product_id)
+    name = product.name
+    log_activity("delete", "Product", product.id, name)
+    db.session.delete(product)
+    db.session.commit()
+    flash(f"محصول «{name}» حذف شد.", "success")
+    return redirect(url_for("admin.products"))
+
+
+@bp.get("/categories")
+@login_required
+def categories():
+    return render_template("admin/categories.html", categories=Category.query.order_by(Category.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/categories/new", methods=["GET", "POST"])
+@bp.route("/categories/<int:category_id>/edit", methods=["GET", "POST"])
+@login_required
+def category_edit(category_id=None):
+    category = Category.query.get_or_404(category_id) if category_id else None
+    form = CategoryForm(obj=category)
+    if form.validate_on_submit():
+        item = category or Category()
+        form.populate_obj(item)
+        item.slug = unique_slug(Category, form.slug.data or form.english_name.data or form.name.data, item.id)
+        if not category:
+            db.session.add(item)
+        log_activity("update" if category else "create", "Category", detail=item.name)
+        db.session.commit()
+        flash("دسته‌بندی ذخیره شد.", "success")
+        return redirect(url_for("admin.categories"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش دسته‌بندی" if category else "دسته‌بندی جدید", back_url=url_for("admin.categories"))
+
+
+@bp.post("/categories/<int:category_id>/delete")
+@login_required
+def category_delete(category_id):
+    item = Category.query.get_or_404(category_id)
+    if item.products or item.portfolios:
+        flash("این دسته دارای محصول یا نمونه‌کار است. ابتدا ارتباط آن‌ها را تغییر دهید.", "error")
+    else:
+        db.session.delete(item)
+        log_activity("delete", "Category", item.id, item.name)
+        db.session.commit()
+        flash("دسته‌بندی حذف شد.", "success")
+    return redirect(url_for("admin.categories"))
+
+
+@bp.get("/features")
+@login_required
+def features():
+    return render_template("admin/features.html", features=ProductFeature.query.order_by(ProductFeature.product_id, ProductFeature.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/features/new", methods=["GET", "POST"])
+@bp.route("/features/<int:feature_id>/edit", methods=["GET", "POST"])
+@login_required
+def feature_edit(feature_id=None):
+    item = ProductFeature.query.get_or_404(feature_id) if feature_id else None
+    form = FeatureForm(obj=item)
+    form.product_id.choices = products_choices()
+    if request.args.get("product", type=int) and request.method == "GET":
+        form.product_id.data = request.args.get("product", type=int)
+    if form.validate_on_submit():
+        feature = item or ProductFeature()
+        form.populate_obj(feature)
+        if not item:
+            db.session.add(feature)
+        log_activity("update" if item else "create", "ProductFeature", detail=feature.title)
+        db.session.commit()
+        flash("قابلیت ذخیره شد.", "success")
+        return redirect(url_for("admin.features"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش قابلیت" if item else "قابلیت جدید", back_url=url_for("admin.features"))
+
+
+@bp.post("/features/<int:feature_id>/delete")
+@login_required
+def feature_delete(feature_id):
+    item = ProductFeature.query.get_or_404(feature_id)
+    db.session.delete(item)
+    log_activity("delete", "ProductFeature", item.id, item.title)
+    db.session.commit()
+    flash("قابلیت حذف شد.", "success")
+    return redirect(url_for("admin.features"))
+
+
+@bp.get("/integrations")
+@login_required
+def integrations():
+    connectors = PlatformConnector.query.order_by(PlatformConnector.product_id, PlatformConnector.position).all()
+    modules = ProductModule.query.order_by(ProductModule.product_id, ProductModule.position).all()
+    return render_template("admin/integrations.html", connectors=connectors, modules=modules, delete_form=DeleteForm())
+
+
+@bp.route("/connectors/new", methods=["GET", "POST"])
+@bp.route("/connectors/<int:connector_id>/edit", methods=["GET", "POST"])
+@login_required
+def connector_edit(connector_id=None):
+    item = PlatformConnector.query.get_or_404(connector_id) if connector_id else None
+    form = ConnectorForm(obj=item)
+    form.product_id.choices = products_choices()
+    if item and request.method == "GET":
+        form.supported_features_text.data = "\n".join(item.supported_features or [])
+        form.limitations_text.data = "\n".join(item.limitations or [])
+    elif request.args.get("product", type=int) and request.method == "GET":
+        form.product_id.data = request.args.get("product", type=int)
+    if form.validate_on_submit():
+        duplicate = PlatformConnector.query.filter_by(product_id=form.product_id.data, platform=form.platform.data.strip().lower()).first()
+        if duplicate and duplicate.id != connector_id:
+            form.platform.errors.append("این پلتفرم قبلاً برای محصول ثبت شده است.")
+        else:
+            connector = item or PlatformConnector()
+            form.populate_obj(connector)
+            connector.platform = form.platform.data.strip().lower()
+            connector.supported_features = split_lines(form.supported_features_text.data)
+            connector.limitations = split_lines(form.limitations_text.data)
+            if not item:
+                db.session.add(connector)
+            log_activity("update" if item else "create", "PlatformConnector", detail=f"{connector.product_id}/{connector.platform}")
+            db.session.commit()
+            flash("Connector و وضعیت واقعی اتصال ذخیره شد.", "success")
+            return redirect(url_for("admin.integrations"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش Connector" if item else "Connector جدید", back_url=url_for("admin.integrations"))
+
+
+@bp.post("/connectors/<int:connector_id>/delete")
+@login_required
+def connector_delete(connector_id):
+    item = PlatformConnector.query.get_or_404(connector_id)
+    db.session.delete(item)
+    log_activity("delete", "PlatformConnector", item.id, item.platform)
+    db.session.commit()
+    flash("Connector حذف شد.", "success")
+    return redirect(url_for("admin.integrations"))
+
+
+@bp.route("/modules/new", methods=["GET", "POST"])
+@bp.route("/modules/<int:module_id>/edit", methods=["GET", "POST"])
+@login_required
+def module_edit(module_id=None):
+    item = ProductModule.query.get_or_404(module_id) if module_id else None
+    form = ModuleForm(obj=item)
+    form.product_id.choices = products_choices()
+    if request.args.get("product", type=int) and request.method == "GET":
+        form.product_id.data = request.args.get("product", type=int)
+    if form.validate_on_submit():
+        module = item or ProductModule()
+        form.populate_obj(module)
+        if not item:
+            db.session.add(module)
+        log_activity("update" if item else "create", "ProductModule", detail=module.name)
+        db.session.commit()
+        flash("ماژول محصول ذخیره شد.", "success")
+        return redirect(url_for("admin.integrations"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش ماژول" if item else "ماژول جدید", back_url=url_for("admin.integrations"))
+
+
+@bp.post("/modules/<int:module_id>/delete")
+@login_required
+def module_delete(module_id):
+    item = ProductModule.query.get_or_404(module_id)
+    db.session.delete(item)
+    db.session.commit()
+    flash("ماژول حذف شد.", "success")
+    return redirect(url_for("admin.integrations"))
+
+
+@bp.get("/portfolios")
+@login_required
+def portfolios():
+    return render_template("admin/portfolios.html", portfolios=Portfolio.query.order_by(Portfolio.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/portfolios/new", methods=["GET", "POST"])
+@bp.route("/portfolios/<int:portfolio_id>/edit", methods=["GET", "POST"])
+@login_required
+def portfolio_edit(portfolio_id=None):
+    item = Portfolio.query.get_or_404(portfolio_id) if portfolio_id else None
+    form = PortfolioForm(obj=item)
+    form.product_ids.choices = products_choices()
+    form.category_ids.choices = [(c.id, c.name) for c in Category.query.order_by(Category.position).all()]
+    if item and request.method == "GET":
+        form.product_ids.data = [link.product_id for link in item.product_links]
+        form.category_ids.data = [c.id for c in item.categories]
+    if form.validate_on_submit():
+        portfolio = item or Portfolio()
+        form.populate_obj(portfolio)
+        portfolio.slug = unique_slug(Portfolio, form.slug.data or form.title.data, portfolio.id)
+        portfolio.categories = Category.query.filter(Category.id.in_(form.category_ids.data or [])).all()
+        if not item:
+            db.session.add(portfolio)
+            db.session.flush()
+        selected = set(form.product_ids.data or [])
+        for link in list(portfolio.product_links):
+            if link.product_id not in selected:
+                db.session.delete(link)
+        existing = {link.product_id for link in portfolio.product_links}
+        for pid in selected - existing:
+            portfolio.product_links.append(ProductPortfolio(product_id=pid))
+        try:
+            if form.cover.data:
+                old = portfolio.cover_path
+                portfolio.cover_path = save_upload(form.cover.data, "image")["path"]
+                delete_upload(old)
+            log_activity("update" if item else "create", "Portfolio", detail=portfolio.title)
+            db.session.commit()
+            flash("نمونه‌کار ذخیره شد.", "success")
+            return redirect(url_for("admin.portfolios"))
+        except (MediaValidationError, OSError) as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+    return render_template("admin/simple_form.html", form=form, title="ویرایش نمونه‌کار" if item else "نمونه‌کار جدید", back_url=url_for("admin.portfolios"))
+
+
+@bp.post("/portfolios/<int:portfolio_id>/delete")
+@login_required
+def portfolio_delete(portfolio_id):
+    item = Portfolio.query.get_or_404(portfolio_id)
+    db.session.delete(item)
+    log_activity("delete", "Portfolio", item.id, item.title)
+    db.session.commit()
+    flash("نمونه‌کار حذف شد.", "success")
+    return redirect(url_for("admin.portfolios"))
+
+
+@bp.get("/media")
+@login_required
+def media_library():
+    product_media = ProductMedia.query.order_by(ProductMedia.created_at.desc()).all()
+    portfolio_media = PortfolioMedia.query.order_by(PortfolioMedia.created_at.desc()).all()
+    return render_template("admin/media.html", product_media=product_media, portfolio_media=portfolio_media, delete_form=DeleteForm())
+
+
+@bp.route("/media/new", methods=["GET", "POST"])
+@login_required
+def media_new():
+    form = MediaForm()
+    owner_type = request.values.get("owner_type", "product")
+    form.owner_type.data = owner_type
+    if owner_type == "portfolio":
+        form.owner_id.choices = [(p.id, p.title) for p in Portfolio.query.order_by(Portfolio.title).all()]
+    else:
+        form.owner_id.choices = products_choices()
+    if request.method == "GET" and request.args.get("owner_id", type=int):
+        form.owner_id.data = request.args.get("owner_id", type=int)
+    if form.validate_on_submit():
+        kind = {"image": "image", "video": "video", "document": "document"}[form.media_type.data]
+        uploaded_files = form.file.data if isinstance(form.file.data, list) else [form.file.data]
+        uploaded_files = [file for file in uploaded_files if file and file.filename]
+        if len(uploaded_files) > (20 if kind == "image" else 1):
+            form.file.errors.append("در هر بار حداکثر ۲۰ تصویر یا یک ویدئو/PDF انتخاب کنید.")
+        else:
+            saved_paths = []
+            try:
+                for index, upload in enumerate(uploaded_files):
+                    saved = save_upload(upload, kind)
+                    saved_paths.extend([saved["path"], saved["thumbnail"]])
+                    title = form.title.data if len(uploaded_files) == 1 else f"{form.title.data} — {index + 1}"
+                    if form.owner_type.data == "portfolio":
+                        Portfolio.query.get_or_404(form.owner_id.data)
+                        item = PortfolioMedia(portfolio_id=form.owner_id.data, title=title,
+                            description=form.description.data, alt_text=form.alt_text.data,
+                            media_type=form.media_type.data, file_path=saved["path"], thumbnail_path=saved["thumbnail"],
+                            mime_type=saved["mime_type"], file_size=saved["size"], position=form.position.data + index,
+                            is_cover=form.is_cover.data and index == 0, is_published=form.is_published.data)
+                        if item.is_cover:
+                            PortfolioMedia.query.filter_by(portfolio_id=item.portfolio_id).update({"is_cover": False})
+                            item.portfolio.cover_path = item.file_path
+                    else:
+                        Product.query.get_or_404(form.owner_id.data)
+                        item = ProductMedia(product_id=form.owner_id.data, title=title,
+                            description=form.description.data, alt_text=form.alt_text.data,
+                            media_type=form.media_type.data, file_path=saved["path"], thumbnail_path=saved["thumbnail"],
+                            mime_type=saved["mime_type"], file_size=saved["size"], position=form.position.data + index,
+                            is_mockup=form.is_mockup.data, is_published=form.is_published.data)
+                    db.session.add(item)
+                log_activity("upload", "Media", detail=f"{len(uploaded_files)} فایل برای {form.title.data}")
+                db.session.commit()
+                flash(f"{len(uploaded_files)} رسانه بارگذاری و متصل شد.", "success")
+                return redirect(url_for("admin.media_library"))
+            except (MediaValidationError, OSError) as exc:
+                db.session.rollback()
+                for path in saved_paths:
+                    delete_upload(path)
+                flash(str(exc), "error")
+    return render_template("admin/simple_form.html", form=form, title="بارگذاری رسانه", back_url=url_for("admin.media_library"))
+
+
+@bp.route("/media/<kind>/<int:media_id>/edit", methods=["GET", "POST"])
+@login_required
+def media_edit(kind, media_id):
+    model = ProductMedia if kind == "product" else PortfolioMedia if kind == "portfolio" else None
+    if not model:
+        abort(404)
+    item = model.query.get_or_404(media_id)
+    form = (ProductMediaEditForm if kind == "product" else PortfolioMediaEditForm)(obj=item)
+    if form.validate_on_submit():
+        old_paths = [item.file_path, item.thumbnail_path]
+        new_paths = []
+        try:
+            if form.file.data:
+                saved = save_upload(form.file.data, {"image": "image", "video": "video", "document": "document"}[item.media_type])
+                new_paths = [saved["path"], saved["thumbnail"]]
+                item.file_path = saved["path"]
+                item.thumbnail_path = saved["thumbnail"]
+                item.mime_type = saved["mime_type"]
+                item.file_size = saved["size"]
+            item.title = form.title.data
+            item.description = form.description.data
+            item.alt_text = form.alt_text.data
+            item.position = form.position.data
+            item.is_published = form.is_published.data
+            if kind == "product":
+                item.is_mockup = form.is_mockup.data
+            else:
+                was_cover = item.is_cover
+                item.is_cover = form.is_cover.data
+                if item.is_cover:
+                    PortfolioMedia.query.filter(PortfolioMedia.portfolio_id == item.portfolio_id, PortfolioMedia.id != item.id).update({"is_cover": False})
+                    item.portfolio.cover_path = item.file_path
+                elif was_cover:
+                    item.portfolio.cover_path = None
+            log_activity("update", "Media", item.id, item.title)
+            db.session.commit()
+        except (MediaValidationError, OSError) as exc:
+            db.session.rollback()
+            for path in new_paths:
+                delete_upload(path)
+            flash(str(exc), "error")
+        else:
+            if new_paths:
+                for path in old_paths:
+                    if path and path not in new_paths:
+                        delete_upload(path)
+            flash("رسانه و تنظیمات نمایش آن به‌روز شد.", "success")
+            return redirect(url_for("admin.media_library"))
+    return render_template("admin/simple_form.html", form=form, title=f"ویرایش رسانه: {item.title}", back_url=url_for("admin.media_library"))
+
+
+@bp.post("/media/<kind>/<int:media_id>/delete")
+@login_required
+def media_delete(kind, media_id):
+    model = ProductMedia if kind == "product" else PortfolioMedia if kind == "portfolio" else None
+    if not model:
+        abort(404)
+    item = model.query.get_or_404(media_id)
+    delete_upload(item.file_path)
+    delete_upload(item.thumbnail_path)
+    db.session.delete(item)
+    log_activity("delete_media", kind, media_id)
+    db.session.commit()
+    flash("رسانه حذف شد.", "success")
+    return redirect(url_for("admin.media_library"))
+
+
+@bp.get("/faqs")
+@login_required
+def faqs():
+    return render_template("admin/faqs.html", faqs=FAQ.query.order_by(FAQ.product_id, FAQ.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/faqs/new", methods=["GET", "POST"])
+@bp.route("/faqs/<int:faq_id>/edit", methods=["GET", "POST"])
+@login_required
+def faq_edit(faq_id=None):
+    item = FAQ.query.get_or_404(faq_id) if faq_id else None
+    form = FAQForm(obj=item)
+    form.product_id.choices = products_choices((0, "پرسش عمومی"))
+    if request.method == "GET" and request.args.get("product", type=int):
+        form.product_id.data = request.args.get("product", type=int)
+    if form.validate_on_submit():
+        faq = item or FAQ()
+        form.populate_obj(faq)
+        faq.product_id = form.product_id.data or None
+        if not item:
+            db.session.add(faq)
+        log_activity("update" if item else "create", "FAQ", detail=faq.question)
+        db.session.commit()
+        flash("پرسش ذخیره شد.", "success")
+        return redirect(url_for("admin.faqs"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش پرسش" if item else "پرسش جدید", back_url=url_for("admin.faqs"))
+
+
+@bp.post("/faqs/<int:faq_id>/delete")
+@login_required
+def faq_delete(faq_id):
+    item = FAQ.query.get_or_404(faq_id)
+    db.session.delete(item)
+    db.session.commit()
+    flash("پرسش حذف شد.", "success")
+    return redirect(url_for("admin.faqs"))
+
+
+@bp.get("/content")
+@login_required
+def content():
+    rows = PageContent.query.order_by(PageContent.page_key, PageContent.position).all()
+    pages = CustomPage.query.order_by(CustomPage.updated_at.desc()).all()
+    return render_template("admin/content.html", contents=rows, custom_pages=pages, delete_form=DeleteForm())
+
+
+@bp.route("/content/new", methods=["GET", "POST"])
+@bp.route("/content/<int:content_id>/edit", methods=["GET", "POST"])
+@login_required
+def content_edit(content_id=None):
+    item = PageContent.query.get_or_404(content_id) if content_id else None
+    form = PageContentForm(obj=item)
+    if form.validate_on_submit():
+        duplicate = PageContent.query.filter_by(page_key=form.page_key.data, section_key=form.section_key.data).first()
+        if duplicate and duplicate.id != content_id:
+            form.section_key.errors.append("این بخش قبلاً برای صفحه ساخته شده است.")
+        else:
+            content = item or PageContent()
+            form.populate_obj(content)
+            content.body = clean_html(form.body.data)
+            if not item:
+                db.session.add(content)
+            log_activity("update" if item else "create", "PageContent", detail=f"{content.page_key}/{content.section_key}")
+            db.session.commit()
+            flash("محتوای صفحه ذخیره شد.", "success")
+            return redirect(url_for("admin.content"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش محتوا" if item else "محتوای جدید", back_url=url_for("admin.content"))
+
+
+@bp.post("/content/<int:content_id>/delete")
+@login_required
+def content_delete(content_id):
+    item = PageContent.query.get_or_404(content_id)
+    db.session.delete(item)
+    db.session.commit()
+    flash("بخش محتوایی حذف شد.", "success")
+    return redirect(url_for("admin.content"))
+
+
+@bp.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    form = SettingsForm()
+    keys = ["brand_name", "brand_tagline", "brand_description", "email", "phone", "address", "website_url", "footer_text", "copyright_text", "default_seo_title", "default_seo_description", "social_share_image"]
+    if request.method == "GET":
+        for key in keys:
+            getattr(form, key).data = SiteSetting.get(key)
+    if form.validate_on_submit():
+        try:
+            for key in keys:
+                save_setting(key, getattr(form, key).data)
+            if form.logo.data:
+                saved = save_upload(form.logo.data, "image")
+                save_setting("brand_logo", saved["path"])
+            log_activity("update", "SiteSetting", detail="brand")
+            db.session.commit()
+            flash("تنظیمات برند و سایت ذخیره شد.", "success")
+            return redirect(url_for("admin.settings"))
+        except (MediaValidationError, OSError) as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+    return render_template("admin/settings.html", form=form)
+
+
+@bp.get("/services")
+@login_required
+def services():
+    return render_template("admin/services.html", services=Service.query.order_by(Service.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/services/new", methods=["GET", "POST"])
+@bp.route("/services/<int:service_id>/edit", methods=["GET", "POST"])
+@login_required
+def service_edit(service_id=None):
+    item = Service.query.get_or_404(service_id) if service_id else None
+    form = ServiceForm(obj=item)
+    if form.validate_on_submit():
+        service = item or Service()
+        form.populate_obj(service)
+        if not item:
+            db.session.add(service)
+        log_activity("update" if item else "create", "Service", detail=service.title)
+        db.session.commit()
+        flash("خدمت ذخیره شد.", "success")
+        return redirect(url_for("admin.services"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش خدمت" if item else "خدمت جدید", back_url=url_for("admin.services"))
+
+
+@bp.post("/services/<int:service_id>/delete")
+@login_required
+def service_delete(service_id):
+    item = Service.query.get_or_404(service_id)
+    db.session.delete(item)
+    log_activity("delete", "Service", item.id, item.title)
+    db.session.commit()
+    flash("خدمت حذف شد.", "success")
+    return redirect(url_for("admin.services"))
+
+
+@bp.get("/workflow")
+@login_required
+def workflow():
+    return render_template("admin/workflow.html", steps=WorkflowStep.query.order_by(WorkflowStep.position).all(), socials=SocialLink.query.order_by(SocialLink.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/workflow/new", methods=["GET", "POST"])
+@bp.route("/workflow/<int:step_id>/edit", methods=["GET", "POST"])
+@login_required
+def workflow_edit(step_id=None):
+    item = WorkflowStep.query.get_or_404(step_id) if step_id else None
+    form = WorkflowForm(obj=item)
+    if form.validate_on_submit():
+        step = item or WorkflowStep()
+        form.populate_obj(step)
+        if not item:
+            db.session.add(step)
+        db.session.commit()
+        flash("مرحله ذخیره شد.", "success")
+        return redirect(url_for("admin.workflow"))
+    return render_template("admin/simple_form.html", form=form, title="مرحله همکاری", back_url=url_for("admin.workflow"))
+
+
+@bp.post("/workflow/<int:step_id>/delete")
+@login_required
+def workflow_delete(step_id):
+    db.session.delete(WorkflowStep.query.get_or_404(step_id))
+    db.session.commit()
+    return redirect(url_for("admin.workflow"))
+
+
+@bp.route("/socials/new", methods=["GET", "POST"])
+@bp.route("/socials/<int:social_id>/edit", methods=["GET", "POST"])
+@login_required
+def social_edit(social_id=None):
+    item = SocialLink.query.get_or_404(social_id) if social_id else None
+    form = SocialForm(obj=item)
+    if form.validate_on_submit():
+        social = item or SocialLink()
+        form.populate_obj(social)
+        if not item:
+            db.session.add(social)
+        db.session.commit()
+        flash("شبکه اجتماعی ذخیره شد.", "success")
+        return redirect(url_for("admin.workflow"))
+    return render_template("admin/simple_form.html", form=form, title="شبکه اجتماعی", back_url=url_for("admin.workflow"))
+
+
+@bp.post("/socials/<int:social_id>/delete")
+@login_required
+def social_delete(social_id):
+    db.session.delete(SocialLink.query.get_or_404(social_id))
+    db.session.commit()
+    return redirect(url_for("admin.workflow"))
+
+
+@bp.get("/leads")
+@login_required
+def leads():
+    status = request.args.get("status", "")
+    q = (request.args.get("q") or "").strip()
+    kind = request.args.get("kind", "lead")
+    model = ContactMessage if kind == "message" else Lead
+    query = model.query
+    if status:
+        query = query.filter_by(status=status)
+    if q:
+        query = query.filter(or_(model.name.ilike(f"%{q}%"), model.phone.ilike(f"%{q}%")))
+    rows = query.order_by(model.created_at.desc()).all()
+    return render_template("admin/leads.html", leads=rows, kind=kind, q=q, status=status)
+
+
+@bp.route("/leads/<kind>/<int:lead_id>", methods=["GET", "POST"])
+@login_required
+def lead_detail(kind, lead_id):
+    model = ContactMessage if kind == "message" else Lead if kind == "lead" else None
+    if not model:
+        abort(404)
+    item = model.query.get_or_404(lead_id)
+    form = LeadUpdateForm(obj=item)
+    if form.validate_on_submit():
+        item.status = form.status.data
+        item.admin_note = form.admin_note.data
+        log_activity("lead_update", kind, item.id, item.status)
+        db.session.commit()
+        flash("وضعیت پیگیری ذخیره شد.", "success")
+        return redirect(url_for("admin.lead_detail", kind=kind, lead_id=item.id))
+    return render_template("admin/lead_detail.html", item=item, form=form, kind=kind)
+
+
+@bp.get("/leads/export.csv")
+@login_required
+def leads_export():
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["نام", "مجموعه", "تلفن", "ایمیل", "محصول", "نوع", "پیام", "وضعیت", "تاریخ"])
+    for lead in Lead.query.order_by(Lead.created_at.desc()).all():
+        def safe(value):
+            text = str(value or "")
+            return "'" + text if text.startswith(("=", "+", "-", "@")) else text
+        writer.writerow([safe(x) for x in [lead.name, lead.organization, lead.phone, lead.email, lead.product.name if lead.product else "", lead.request_type, lead.message, lead.status, lead.created_at.isoformat()]])
+    return Response("\ufeff" + output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=leads.csv"})
+
+
+@bp.get("/repositories")
+@login_required
+def repositories():
+    repos = ProductRepository.query.order_by(ProductRepository.name).all()
+    analyses = RepositoryAnalysis.query.order_by(RepositoryAnalysis.repository_name).all()
+    return render_template("admin/repositories.html", repositories=repos, analyses=analyses, delete_form=DeleteForm())
+
+
+@bp.post("/repositories/<int:repo_id>/sync")
+@login_required
+def repository_sync(repo_id):
+    repo = ProductRepository.query.get_or_404(repo_id)
+    if not repo.is_enabled:
+        flash("همگام‌سازی این مخزن غیرفعال است.", "warning")
+    else:
+        log = sync_repository(repo)
+        log_activity("github_sync", "ProductRepository", repo.id, log.status)
+        db.session.commit()
+        flash(log.message, "success" if log.status == "success" else "error")
+    return redirect(url_for("admin.repositories"))
+
+
+@bp.post("/repositories/<int:repo_id>/toggle")
+@login_required
+def repository_toggle(repo_id):
+    repo = ProductRepository.query.get_or_404(repo_id)
+    repo.is_enabled = not repo.is_enabled
+    log_activity("github_toggle", "ProductRepository", repo.id, str(repo.is_enabled))
+    db.session.commit()
+    flash("وضعیت همگام‌سازی تغییر کرد.", "success")
+    return redirect(url_for("admin.repositories"))
+
+
+@bp.post("/repositories/<int:repo_id>/approve")
+@login_required
+def repository_approve(repo_id):
+    repo = ProductRepository.query.get_or_404(repo_id)
+    repo.pending_changes = {}
+    log_activity("github_approve", "ProductRepository", repo.id, "تغییرات بررسی شد؛ محتوای عمومی تغییر نکرد.")
+    db.session.commit()
+    flash("گزارش تغییرات بررسی و بسته شد. محتوای دستی محصول تغییری نکرد.", "success")
+    return redirect(url_for("admin.repositories"))
+
+
+@bp.get("/analyses/<int:analysis_id>")
+@login_required
+def analysis_detail(analysis_id):
+    item = RepositoryAnalysis.query.get_or_404(analysis_id)
+    return render_template("admin/analysis_detail.html", item=item)
+
+
+@bp.get("/activity")
+@superadmin_required
+def activity():
+    rows = ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(300).all()
+    return render_template("admin/activity.html", activities=rows)
+
+# ----- Custom pages and navigation -----
+@bp.get("/pages")
+@login_required
+def custom_pages():
+    rows = CustomPage.query.order_by(CustomPage.updated_at.desc()).all()
+    return render_template("admin/pages.html", pages=rows, delete_form=DeleteForm())
+
+
+@bp.route("/pages/new", methods=["GET", "POST"])
+@bp.route("/pages/<int:page_id>/edit", methods=["GET", "POST"])
+@login_required
+def custom_page_edit(page_id=None):
+    item = CustomPage.query.get_or_404(page_id) if page_id else None
+    form = CustomPageForm(obj=item)
+    form.parent_content_id.choices = [(0, "بدون اتصال؛ فقط صفحه مستقل")] + [
+        (content.id, f"{content.page_key}/{content.section_key} — {content.title or 'بدون عنوان'}")
+        for content in PageContent.query.order_by(PageContent.page_key, PageContent.position).all()
+    ]
+    if not item and request.method == "GET":
+        form.parent_content_id.data = request.args.get("parent_content_id", 0, type=int)
+    if form.validate_on_submit():
+        page = item or CustomPage()
+        try:
+            apply_page_data(page, form.data)
+            if not item:
+                db.session.add(page)
+            log_activity("update" if item else "create", "CustomPage", page.id, page.title)
+            db.session.commit()
+            flash("صفحه ذخیره شد. وضعیت انتشار و آدرس عمومی از فهرست صفحات قابل مدیریت است.", "success")
+            return redirect(url_for("admin.custom_page_edit", page_id=page.id))
+        except PageValidationError as exc:
+            db.session.rollback()
+            form.slug.errors.append(str(exc))
+    return render_template("admin/page_form.html", form=form, page=item, title="ویرایش صفحه" if item else "صفحه اختصاصی جدید")
+
+
+@bp.get("/pages/<int:page_id>/preview")
+@login_required
+def custom_page_preview(page_id):
+    page = CustomPage.query.get_or_404(page_id)
+    if page.css_content or page.js_content:
+        g.csp_nonce = secrets.token_urlsafe(18)
+    return render_template("public/custom_page.html", page=page, admin_preview=True)
+
+
+@bp.post("/pages/<int:page_id>/status")
+@login_required
+def custom_page_status(page_id):
+    page = CustomPage.query.get_or_404(page_id)
+    try:
+        set_page_status(page, request.form.get("status", ""))
+        log_activity("status", "CustomPage", page.id, page.status)
+        db.session.commit()
+        flash("وضعیت انتشار صفحه تغییر کرد.", "success")
+    except PageValidationError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("admin.custom_pages"))
+
+
+@bp.post("/pages/<int:page_id>/delete")
+@login_required
+def custom_page_delete(page_id):
+    page = CustomPage.query.get_or_404(page_id)
+    title = page.title
+    db.session.delete(page)
+    log_activity("delete", "CustomPage", page_id, title)
+    db.session.commit()
+    flash("صفحه و Redirectهای مرتبط حذف شدند.", "success")
+    return redirect(url_for("admin.custom_pages"))
+
+
+@bp.get("/menus")
+@login_required
+def menus():
+    return render_template("admin/menus.html", items=MenuItem.query.order_by(MenuItem.location, MenuItem.position).all(), delete_form=DeleteForm())
+
+
+@bp.route("/menus/new", methods=["GET", "POST"])
+@bp.route("/menus/<int:menu_id>/edit", methods=["GET", "POST"])
+@login_required
+def menu_edit(menu_id=None):
+    item = MenuItem.query.get_or_404(menu_id) if menu_id else None
+    form = MenuItemForm(obj=item)
+    form.page_id.choices = [(0, "بدون صفحه اختصاصی")] + [(p.id, p.title) for p in CustomPage.query.filter_by(status="published").order_by(CustomPage.title).all()]
+    form.parent_id.choices = [(0, "بدون والد")] + [(m.id, m.title) for m in MenuItem.query.filter(MenuItem.id != (menu_id or 0)).order_by(MenuItem.title).all()]
+    if form.validate_on_submit():
+        if not (form.page_id.data or form.internal_url.data or form.external_url.data):
+            form.internal_url.errors.append("یک صفحه، لینک داخلی یا لینک خارجی انتخاب کنید.")
+            return render_template("admin/simple_form.html", form=form, title="ویرایش منو" if item else "آیتم منوی جدید", back_url=url_for("admin.menus"))
+        menu = item or MenuItem()
+        data = form.data.copy()
+        data["page_id"] = form.page_id.data or None
+        data["parent_id"] = form.parent_id.data or None
+        try:
+            apply_menu_data(menu, data)
+            if not item:
+                db.session.add(menu)
+            log_activity("update" if item else "create", "MenuItem", menu.id, menu.title)
+            db.session.commit()
+            flash("آیتم منو ذخیره شد.", "success")
+            return redirect(url_for("admin.menus"))
+        except AgentToolError as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+    return render_template("admin/simple_form.html", form=form, title="ویرایش منو" if item else "آیتم منوی جدید", back_url=url_for("admin.menus"))
+
+
+@bp.post("/menus/<int:menu_id>/delete")
+@login_required
+def menu_delete(menu_id):
+    item = MenuItem.query.get_or_404(menu_id)
+    db.session.delete(item)
+    log_activity("delete", "MenuItem", menu_id, item.title)
+    db.session.commit()
+    flash("آیتم و زیرمنوهای آن حذف شد.", "success")
+    return redirect(url_for("admin.menus"))
+
+
+# ----- AI agents, approvals and audit -----
+@bp.get("/agents")
+@login_required
+def agents():
+    rows = AgentConnection.query.order_by(AgentConnection.created_at.desc()).all()
+    pending = AgentApproval.query.filter_by(status="pending").order_by(AgentApproval.created_at).all()
+    return render_template("admin/agents.html", agents=rows, pending=pending, tools=TOOLS, delete_form=DeleteForm(), new_token=None)
+
+
+@bp.route("/agents/new", methods=["GET", "POST"])
+@bp.route("/agents/<int:agent_id>/edit", methods=["GET", "POST"])
+@login_required
+def agent_edit(agent_id=None):
+    item = AgentConnection.query.get_or_404(agent_id) if agent_id else None
+    form = AgentConnectionForm(obj=item)
+    new_token = None
+    if form.validate_on_submit():
+        agent = item or AgentConnection()
+        duplicate = AgentConnection.query.filter(AgentConnection.name == form.name.data.strip(), AgentConnection.id != (agent_id or 0)).first()
+        if duplicate:
+            form.name.errors.append("این نام قبلاً استفاده شده است.")
+        else:
+            agent.name = form.name.data.strip()
+            agent.description = form.description.data
+            agent.permissions = form.permissions.data
+            agent.expires_at = datetime.combine(form.expires_at.data, datetime.min.time()) if form.expires_at.data else None
+            agent.rate_limit_per_minute = form.rate_limit_per_minute.data
+            agent.is_enabled = form.is_enabled.data
+            agent.require_approval_for_sensitive = form.require_approval_for_sensitive.data
+            if not item:
+                new_token = issue_token(agent)
+                db.session.add(agent)
+            log_activity("update" if item else "create", "AgentConnection", agent.id, agent.name)
+            db.session.commit()
+            if new_token:
+                flash("کلید فقط در همین پاسخ نمایش داده می‌شود؛ آن را در محل امن Client ذخیره کنید.", "success")
+                return render_template("admin/agents.html", agents=AgentConnection.query.all(), pending=AgentApproval.query.filter_by(status="pending").all(), tools=TOOLS, delete_form=DeleteForm(), new_token=new_token)
+            flash("تنظیمات و مجوزهای ایجنت ذخیره شد.", "success")
+            return redirect(url_for("admin.agents"))
+    return render_template("admin/simple_form.html", form=form, title="ویرایش ایجنت" if item else "اتصال ایجنت جدید", back_url=url_for("admin.agents"))
+
+
+@bp.post("/agents/<int:agent_id>/rotate")
+@login_required
+def agent_rotate(agent_id):
+    agent = AgentConnection.query.get_or_404(agent_id)
+    token = issue_token(agent)
+    agent.revoked_at = None
+    log_activity("rotate_token", "AgentConnection", agent.id, agent.name)
+    db.session.commit()
+    flash("کلید جدید صادر و کلید قبلی بلافاصله باطل شد. کلید جدید فقط همین یک بار نمایش داده می‌شود.", "success")
+    return render_template("admin/agents.html", agents=AgentConnection.query.all(), pending=AgentApproval.query.filter_by(status="pending").all(), tools=TOOLS, delete_form=DeleteForm(), new_token=token)
+
+
+@bp.post("/agents/<int:agent_id>/revoke")
+@login_required
+def agent_revoke(agent_id):
+    from datetime import datetime as dt
+    agent = AgentConnection.query.get_or_404(agent_id)
+    agent.revoked_at = dt.utcnow()
+    agent.is_enabled = False
+    log_activity("revoke", "AgentConnection", agent.id, agent.name)
+    db.session.commit()
+    flash("دسترسی ایجنت بلافاصله لغو شد.", "success")
+    return redirect(url_for("admin.agents"))
+
+
+@bp.post("/agents/<int:agent_id>/delete")
+@login_required
+def agent_delete(agent_id):
+    agent = AgentConnection.query.get_or_404(agent_id)
+    name = agent.name
+    db.session.delete(agent)
+    log_activity("delete", "AgentConnection", agent_id, name)
+    db.session.commit()
+    flash("اتصال، اعتبارنامه و سابقه اختصاصی آن حذف شد.", "success")
+    return redirect(url_for("admin.agents"))
+
+
+@bp.post("/approvals/<int:approval_id>/<decision>")
+@login_required
+def approval_review(approval_id, decision):
+    approval = AgentApproval.query.get_or_404(approval_id)
+    if approval.status != "pending":
+        flash("این درخواست قبلاً بررسی شده است.", "error")
+        return redirect(url_for("admin.agents"))
+    if decision not in ("approve", "reject"):
+        abort(404)
+    if decision == "reject":
+        approval.status = "rejected"
+    else:
+        try:
+            result = execute_tool(approval.agent, approval.tool_name, approval.payload, approved_by=current_user.id, skip_approval=True)
+            approval.status = "approved"
+            approval.result = result
+            flash("عملیات تأیید و از مسیر سرویس امن اجرا شد.", "success")
+        except AgentToolError as exc:
+            approval.status = "rejected"
+            approval.result = {"error": str(exc)}
+            flash(f"اجرای عملیات ناموفق بود: {exc}", "error")
+    approval.reviewed_by = current_user.id
+    approval.reviewed_at = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("admin.agents"))
+
+
+@bp.get("/agent-activity")
+@login_required
+def agent_activity():
+    query = AgentActivity.query
+    agent_id = request.args.get("agent", type=int)
+    status = request.args.get("status", "")
+    operation = request.args.get("operation", "")
+    if agent_id: query = query.filter_by(agent_id=agent_id)
+    if status: query = query.filter_by(status=status)
+    if operation: query = query.filter_by(operation=operation)
+    rows = query.order_by(AgentActivity.id.desc()).limit(300).all()
+    return render_template("admin/agent_activity.html", activities=rows, agents=AgentConnection.query.all())
