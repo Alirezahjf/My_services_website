@@ -67,9 +67,14 @@ def products():
     page = request.args.get("page", 1, type=int)
     pagination = query.order_by(*ordering).paginate(page=max(page, 1), per_page=9, error_out=False)
     categories = Category.query.filter_by(is_visible=True).order_by(Category.position).all()
+    # The counts in the head of the page describe the whole catalogue, so
+    # they do not change when a filter is applied.
+    catalogue_total = published_products().count()
+    concept_total = published_products().filter(Product.commercial_status == "concept").count()
     return render_template("public/products.html", pagination=pagination, products=pagination.items,
                            categories=categories, q=q, selected_category=category_slug,
-                           selected_type=product_type, selected_featured=featured, sort=sort)
+                           selected_type=product_type, selected_featured=featured, sort=sort,
+                           catalogue_total=catalogue_total, concept_total=concept_total)
 
 
 @bp.get("/products/<slug>")

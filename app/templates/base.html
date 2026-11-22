@@ -21,15 +21,18 @@
   <link rel="icon" href="{{ url_for('static',filename='img/brand-mark.svg') }}" type="image/svg+xml">
   <link rel="preload" href="{{ url_for('static',filename='fonts/Vazirmatn-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static',filename='css/main.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='css/design.css') }}">
   {% block head %}{% endblock %}
-  <noscript><style>.reveal,.has-reveal .reveal,[data-page-enter]>*,.hero-visual[data-page-enter]{opacity:1;transform:none}</style></noscript>
+  <noscript><style>.reveal,.has-reveal .reveal,[data-page-enter]>*,.hero-visual[data-page-enter]{opacity:1;transform:none}.reveal-line>span{transform:none!important}</style></noscript>
   <!-- The script is loaded in the head so that it runs before the body is
        painted. It marks the page as animated and the entrance animation
        then starts without the content ever appearing and disappearing. -->
   <script src="{{ url_for('static',filename='js/main.js') }}" defer></script>
+  <script src="{{ url_for('static',filename='js/motion.js') }}" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="scroll-progress" data-scroll-progress aria-hidden="true"></div>
+  <div class="grain-layer" aria-hidden="true"></div>
   <a class="skip-link" href="#main-content">رفتن به محتوای اصلی</a>
   <header class="site-header" data-header>
     <div class="container header-inner">
