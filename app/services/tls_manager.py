@@ -38,6 +38,10 @@ _NEIGHBOUR_UNIT_HINTS = ("shomarejoo", "shomar", "runup", "run-up", "number", "d
 # Directories that may hold the neighbour checkout.
 _NEIGHBOUR_DIR_HINTS = ("shomarejoo", "shomar", "runup", "run-up")
 
+# The root of this project. Everything that lives inside it belongs to this
+# project and can never be the neighbour's certificate.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class CertificateError(RuntimeError):
     """Raised when a candidate certificate cannot be used."""
@@ -288,6 +292,48 @@ def _list_systemd_units() -> list[str]:
     return units
 
 
+# The units this project runs under. Their name carries the "runup" hint,
+# so they have to be recognised and left out of the neighbour's search.
+_OWN_UNIT_NAMES = (
+    "runup-web",
+    "runup-tls",
+    "runup-mcp",
+    "runup-web.service",
+    "runup-tls.service",
+    "runup-mcp.service",
+)
+
+
+def _is_own_unit(unit: str) -> bool:
+    """Is this one of the units of this project?"""
+    name = unit.lower().strip()
+    if name in _OWN_UNIT_NAMES:
+        return True
+    return name.startswith(("runup-web", "runup-tls", "runup-mcp"))
+
+
+def _is_own_directory(path: Path) -> bool:
+    """Is this directory part of this project?
+
+    The certificate of the neighbour is only useful when it is somewhere
+    else. A certificate that lies inside this project — a test
+    certificate, for example — would be picked up otherwise and would
+    never cover the public address.
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    project = PROJECT_ROOT
+    if project is None:
+        return False
+    try:
+        project = project.resolve()
+    except OSError:
+        pass
+    return resolved == project or project in resolved.parents
+
+
 def _is_dir(path: Path) -> bool:
     """``Path.is_dir`` that never raises, whatever the permissions are."""
     try:
@@ -303,6 +349,11 @@ def _candidate_neighbour_dirs() -> list[Path]:
     # 1. The working directory of a neighbour systemd unit.
     for unit in _list_systemd_units():
         if not any(hint in unit.lower() for hint in _NEIGHBOUR_UNIT_HINTS):
+            continue
+        # Our own units carry the same name pattern. They point at this
+        # project, and a certificate that lies in this project is not the
+        # neighbour's certificate.
+        if _is_own_unit(unit):
             continue
         workdir = _systemd_working_directory(unit)
         if workdir and _is_dir(workdir):
@@ -327,7 +378,7 @@ def _candidate_neighbour_dirs() -> list[Path]:
         for entry in entries:
             if not any(hint in entry.name.lower() for hint in _NEIGHBOUR_DIR_HINTS):
                 continue
-            if _is_dir(entry):
+            if _is_dir(entry) and not _is_own_directory(entry):
                 candidates.append(entry)
 
     # De-duplicate while preserving order.
@@ -376,26 +427,33 @@ def find_certificate(explicit_path: str | os.PathLike[str] | None = None) -> tup
     if explicit_path:
         path = Path(explicit_path).expanduser()
         notes.append(f"مسیر دستی بررسی شد: {path}")
-        if _is_dir(path):
-            found = _bundle_in_dir(path)
-            if found:
-                return found, notes
-            notes.append("پوشه دستی فایل گواهی نداشت.")
+        if _is_own_directory(path):
+            # A certificate inside this project is not the neighbour's
+            # certificate. It is usually a test certificate, and it never
+            # covers the public address.
+            notes.append("مسیر دستی داخل پروژه خودمان است و گواهی همسایه نیست؛ نادیده گرفته شد.")
+            explicit_path = None
+        else:
+            if _is_dir(path):
+                found = _bundle_in_dir(path)
+                if found:
+                    return found, notes
+                notes.append("پوشه دستی فایل گواهی نداشت.")
+                return None, notes
+            if _is_file(path):
+                return path, notes
+            if _is_blocked(path):
+                notes.append(
+                    f"مسیر دستی وجود دارد ولی کاربر سرویس اجازه ورود به پوشه‌های آن را ندارد: {path}"
+                )
+                return None, notes
+            if _is_unreachable(path):
+                notes.append(
+                    f"پوشه‌های مسیر دستی برای کاربر سرویس بسته‌اند: {path}"
+                )
+                return None, notes
+            notes.append("مسیر دستی وجود نداشت.")
             return None, notes
-        if _is_file(path):
-            return path, notes
-        if _is_blocked(path):
-            notes.append(
-                f"مسیر دستی وجود دارد ولی کاربر سرویس اجازه ورود به پوشه‌های آن را ندارد: {path}"
-            )
-            return None, notes
-        if _is_unreachable(path):
-            notes.append(
-                f"پوشه‌های مسیر دستی برای کاربر سرویس بسته‌اند: {path}"
-            )
-            return None, notes
-        notes.append("مسیر دستی وجود نداشت.")
-        return None, notes
 
     for directory in _candidate_neighbour_dirs():
         found = _bundle_in_dir(directory)
@@ -404,6 +462,66 @@ def find_certificate(explicit_path: str | os.PathLike[str] | None = None) -> tup
             return found, notes
 
     notes.append("در هیچ پوشه همسایه‌ای فایل گواهی پیدا نشد.")
+    return None, notes
+
+
+def find_certificate_for_ip(
+    explicit_path: str | os.PathLike[str] | None = None,
+    required_ip: str | None = None,
+) -> tuple[Path | None, list[str]]:
+    """Locate a certificate that covers ``required_ip``.
+
+    The search does not stop at the first file it finds. A certificate that
+    is valid but was issued for another address — a test certificate that
+    lies in this project, for example — is skipped, and the search goes on.
+    Only when nothing suitable is found does the caller fall back to plain
+    HTTP.
+    """
+    notes: list[str] = []
+    path, path_notes = find_certificate(explicit_path)
+    notes.extend(path_notes)
+    if path is None:
+        return None, notes
+
+    if not required_ip:
+        return path, notes
+
+    try:
+        info = read_certificate(path)
+    except CertificateError as exc:
+        notes.append(f"گواهی در {path} خوانده نشد: {exc}")
+        return None, notes
+
+    if info.is_expired:
+        notes.append(f"گواهی در {path} منقضی شده است.")
+        return None, notes
+
+    if not certificate_covers_ip(info, required_ip):
+        notes.append(
+            f"گواهی در {path} برای {info.subject_ip or 'نامشخص'} صادر شده، نه {required_ip}؛ "
+            f"به جست‌وجو ادامه داده شد."
+        )
+        return _search_for_ip(required_ip, notes)
+
+    return path, notes
+
+
+def _search_for_ip(required_ip: str, notes: list[str]) -> tuple[Path | None, list[str]]:
+    """Look through the neighbour's directories for a certificate for the address."""
+    for directory in _candidate_neighbour_dirs():
+        for name in _CERT_BUNDLE_NAMES:
+            for candidate in (directory / "data" / "tls" / name, directory / name):
+                if not _is_file(candidate):
+                    continue
+                try:
+                    info = read_certificate(candidate)
+                except CertificateError:
+                    continue
+                if info.is_expired or not certificate_covers_ip(info, required_ip):
+                    continue
+                notes.append(f"گواهی برای {required_ip} در {candidate} پیدا شد.")
+                return candidate, notes
+    notes.append(f"گواهی معتبری برای {required_ip} پیدا نشد.")
     return None, notes
 
 
@@ -753,6 +871,10 @@ def public_ip() -> str | None:
 
 # Where the split key/certificate pair is written for Gunicorn to consume.
 TLS_DIR = Path(os.getenv("TLS_MATERIAL_DIR", "instance/tls"))
+if not TLS_DIR.is_absolute():
+    # A relative path would be read against whatever directory the command
+    # happens to run in. The material always belongs to this project.
+    TLS_DIR = PROJECT_ROOT / TLS_DIR
 
 
 def _split_bundle(bundle: Path) -> tuple[bytes, bytes]:
@@ -830,7 +952,12 @@ def prepare_tls_material(
     load_dotenv()
     target_dir = Path(tls_dir) if tls_dir else TLS_DIR
     explicit = bundle_path or os.getenv("TLS_CERT_PATH") or None
-    path, _notes = find_certificate(explicit)
+    wanted = required_ip or os.getenv("PUBLIC_ORIGIN") or ""
+    host = _host_from_url(wanted) if "://" in wanted else (wanted or None)
+
+    # The search looks for a certificate that fits the public address and
+    # does not stop at one that belongs to another address.
+    path, _notes = find_certificate_for_ip(explicit, host)
     if path is None:
         return _existing_material_is_usable(target_dir, required_ip)
     try:
@@ -839,8 +966,6 @@ def prepare_tls_material(
         return _existing_material_is_usable(target_dir, required_ip)
     if info.is_expired:
         return False
-    wanted = required_ip or os.getenv("PUBLIC_ORIGIN") or ""
-    host = _host_from_url(wanted) if "://" in wanted else (wanted or None)
     if host and not certificate_covers_ip(info, host):
         return False
     try:
@@ -907,7 +1032,12 @@ def refresh_tls_material(
 
     load_dotenv()
     explicit = bundle_path or os.getenv("TLS_CERT_PATH") or None
-    path, _notes = find_certificate(explicit)
+    wanted = required_ip or os.getenv("PUBLIC_ORIGIN") or ""
+    host = _host_from_url(wanted) if "://" in wanted else (wanted or None)
+
+    # The search looks for a certificate that fits the public address and
+    # does not stop at one that belongs to another address.
+    path, _notes = find_certificate_for_ip(explicit, host)
     if path is None:
         return False
     try:
@@ -916,8 +1046,6 @@ def refresh_tls_material(
         return False
     if info.is_expired:
         return False
-    wanted = required_ip or os.getenv("PUBLIC_ORIGIN") or ""
-    host = _host_from_url(wanted) if "://" in wanted else (wanted or None)
     if host and not certificate_covers_ip(info, host):
         return False
 

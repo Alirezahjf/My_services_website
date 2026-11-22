@@ -279,4 +279,47 @@ CLOSED_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --insecure 
 CLOSED_SERVED="$(echo | openssl s_client -connect "127.0.0.1:${CHOSEN_TLS_PORT}" -servername 203.0.113.55 2>/dev/null | openssl x509 -noout -fingerprint 2>/dev/null || true)"
 [[ -n "$CLOSED_SERVED" && "$CLOSED_SERVED" == "$EXPECTED" ]] || die "گواهی ارائه‌شده با گواهی بسته همسایه یکی نیست."
 
+# ---------------------------------------------------------------------------
+# The same run with a certificate for another address lying inside this
+# project, the way it happened on the real server.
+# ---------------------------------------------------------------------------
+log "اجرای دوباره با گواهی نادرست داخل پروژه خودمان"
+"$ROOT/.venv/bin/python" - "$SANDBOX/project/cert.pem" <<'PY'
+import datetime, ipaddress, sys
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+
+path = sys.argv[1]
+ip = "127.0.0.1"
+key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, ip)])
+now = datetime.datetime.now(datetime.timezone.utc)
+cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(ip))]), critical=False)
+        .sign(key, hashes.SHA256()))
+with open(path, "wb") as handle:
+    handle.write(key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption()))
+    handle.write(cert.public_bytes(serialization.Encoding.PEM))
+print("foreign certificate written")
+PY
+
+rm -rf "$SANDBOX/project/instance/tls"
+# The neighbour is found the way the server finds it: through its own
+# project. The certificate that lies inside this project must not win.
+export CERT_PATH="$SANDBOX/neighbour/data/tls/trusted.pem"
+bash "$SANDBOX/setup_runup.sh" 2>&1 | tail -30 || die "اسکریپت راه‌اندازی با گواهی نادرست شکست خورد."
+
+[[ -s "$SANDBOX/project/instance/tls/fullchain.pem" ]] || die "زنجیره گواهی همسایه ساخته نشد."
+FOREIGN_SERVED="$(echo | openssl s_client -connect "127.0.0.1:${CHOSEN_TLS_PORT}" -servername 203.0.113.55 2>/dev/null | openssl x509 -noout -fingerprint 2>/dev/null || true)"
+[[ -n "$FOREIGN_SERVED" && "$FOREIGN_SERVED" == "$EXPECTED" ]] \
+  || die "گواهی نادرست داخل پروژه به‌جای گواهی همسایه ارائه شد."
+
 log "همه بررسی‌ها موفق بود."

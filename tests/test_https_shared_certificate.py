@@ -106,6 +106,50 @@ def certificate_authority(tmp_path_factory):
     }
 
 
+@pytest.fixture(scope="session")
+def foreign_certificate(tmp_path_factory):
+    """A certificate for an address that is not the one of this site."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    import datetime
+    import ipaddress
+
+    base = tmp_path_factory.mktemp("foreign")
+    ip = "127.0.0.1"
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, ip)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(ip))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    bundle = base / "trusted.pem"
+    bundle.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+        + cert.public_bytes(serialization.Encoding.PEM),
+    )
+    bundle.chmod(0o600)
+    return {"ip": ip, "bundle": bundle}
+
+
 # ---------------------------------------------------------------------------
 # Materialising the certificate for Gunicorn
 # ---------------------------------------------------------------------------
@@ -687,3 +731,78 @@ def test_https_page_has_no_upgrade_script(client):
         assert "js/https-upgrade.js" not in body
     finally:
         app.config["PUBLIC_ORIGIN"] = old_origin
+
+
+# ---------------------------------------------------------------------------
+# Finding the neighbour's certificate
+# ---------------------------------------------------------------------------
+
+
+def test_the_projects_own_units_are_not_the_neighbours():
+    """Our own units carry the "runup" name and must be left out.
+
+    On the server the units of this project are called runup-web and
+    runup-tls. The neighbour search used to take them for the neighbour's
+    and so pointed at this project, where a test certificate was found.
+    """
+    assert tls_manager._is_own_unit("runup-web.service") is True
+    assert tls_manager._is_own_unit("runup-tls.service") is True
+    assert tls_manager._is_own_unit("runup-mcp.service") is True
+    assert tls_manager._is_own_unit("shomarejoo-web.service") is False
+    assert tls_manager._is_own_unit("nginx.service") is False
+
+
+def test_a_certificate_inside_this_project_is_never_the_neighbours(tmp_path, monkeypatch):
+    """A certificate that lies in this project is ignored."""
+    project = tmp_path / "hjf-services"
+    project.mkdir()
+    own = project / "cert.pem"
+    own.write_text("-----BEGIN CERTIFICATE-----\n")
+    monkeypatch.setattr(tls_manager, "PROJECT_ROOT", project)
+
+    assert tls_manager._is_own_directory(project) is True
+    assert tls_manager._is_own_directory(project / "instance") is True
+    assert tls_manager._is_own_directory(tmp_path / "shomarejoo_web") is False
+
+    found, notes = tls_manager.find_certificate(str(own))
+    assert found != own
+    assert any("داخل پروژه خودمان" in note for note in notes)
+
+
+def test_the_search_continues_past_a_certificate_for_another_address(
+        certificate_authority, foreign_certificate, tmp_path, monkeypatch):
+    """A certificate for another address must not end the search.
+
+    This is what happened on the server: the first certificate that was
+    found belonged to another address, and the search stopped there.
+    """
+    neighbour = tmp_path / "shomarejoo_web"
+    neighbour.mkdir()
+    good = neighbour / "data" / "tls" / "trusted.pem"
+    good.parent.mkdir(parents=True)
+    good.write_bytes(certificate_authority["bundle"].read_bytes())
+
+    own = tmp_path / "hjf-services"
+    own.mkdir()
+    (own / "cert.pem").write_bytes(foreign_certificate["bundle"].read_bytes())
+
+    monkeypatch.setattr(
+        tls_manager, "_candidate_neighbour_dirs", lambda: [own, neighbour])
+
+    path, notes = tls_manager.find_certificate_for_ip(
+        None, certificate_authority["ip"])
+    assert path == good
+    assert any(certificate_authority["ip"] in note for note in notes)
+
+
+def test_no_certificate_for_another_address_is_returned(
+        foreign_certificate, tmp_path, monkeypatch):
+    """When nothing fits the address, nothing is returned."""
+    own = tmp_path / "hjf-services"
+    own.mkdir()
+    (own / "cert.pem").write_bytes(foreign_certificate["bundle"].read_bytes())
+    monkeypatch.setattr(tls_manager, "_candidate_neighbour_dirs", lambda: [own])
+
+    path, notes = tls_manager.find_certificate_for_ip(None, "198.51.100.5")
+    assert path is None
+    assert any("198.51.100.5" in note for note in notes)

@@ -231,24 +231,13 @@ materialise_tls_material('$cert_file', '$APP_DIR/instance/tls', owner='$APP_USER
 log "پیدا کردن گواهی همسایه"
 CERT_FOUND="$("$APP_DIR/.venv/bin/python" - "$CERT_PATH" "$PUBLIC_IP" <<'PY'
 import sys
-from app.services.tls_manager import find_certificate, read_certificate, certificate_covers_ip
+from app.services.tls_manager import find_certificate_for_ip
 
 explicit, public_ip = sys.argv[1] or None, sys.argv[2]
-path, notes = find_certificate(explicit)
+path, notes = find_certificate_for_ip(explicit, public_ip)
 for note in notes:
     print(f"# {note}", file=sys.stderr)
 if path is None:
-    print("")
-    raise SystemExit(0)
-try:
-    info = read_certificate(path)
-except Exception as exc:
-    print("")
-    raise SystemExit(0)
-if info.is_expired:
-    print("")
-    raise SystemExit(0)
-if not certificate_covers_ip(info, public_ip):
     print("")
     raise SystemExit(0)
 print(str(path))
