@@ -59,6 +59,9 @@ def main():
                     window.scrollTo(0, document.body.scrollHeight);
                     await new Promise(r => setTimeout(r, 400));
                 }""")
+                # Wait for the fade to finish before counting; a half
+                # finished transition would be reported as hidden.
+                page.wait_for_timeout(1200)
                 after = page.evaluate(JS)
                 report["results"][key] = {"initial": before, "after_scroll": after}
             report.setdefault("logs", {})[label] = logs
