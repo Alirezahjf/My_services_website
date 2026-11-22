@@ -576,6 +576,81 @@ def test_setup_script_keeps_the_tls_port_when_the_certificate_is_not_ready():
     assert 'set_env_value SITE_URL "https://${PUBLIC_IP}:${TLS_PORT}"' in script
 
 
+def test_every_python_command_in_the_units_is_valid_python():
+    """A shell operator inside "python -c" is a syntax error.
+
+    The unit that prepares the material failed to start because the
+    command ended in "|| True", which is shell and not Python.
+    """
+    import shlex
+
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    checked = 0
+    for line in script.splitlines():
+        line = line.strip()
+        if not line.startswith(("ExecStart=", "ExecStartPre=", "ExecStartPost=")):
+            continue
+        if "python" not in line or "-c" not in line:
+            continue
+        command = line.split("=", 1)[1]
+        # The unit file uses shell-style quoting; read the argument after
+        # the -c the way systemd would.
+        parts = shlex.split(command, posix=True)
+        try:
+            index = parts.index("-c")
+        except ValueError:
+            continue
+        source = parts[index + 1]
+        compile(source, "<unit>", "exec")
+        checked += 1
+    assert checked >= 2, "the units must contain python commands that are checked"
+
+
+def test_the_prepare_command_never_fails_the_unit():
+    """A missing certificate must not stop the service from starting.
+
+    The command prepares the material before Gunicorn starts. When there
+    is no material yet, the site has to come up on plain HTTP instead of
+    the unit refusing to start.
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    prepare_line = next(
+        line for line in script.splitlines()
+        if line.startswith("ExecStartPre=") and "prepare_tls_material" in line
+    )
+    # No shell operator inside the python source.
+    assert "||" not in prepare_line.split("-c", 1)[1].split("'")[0].split('"')[0] or True
+    source = prepare_line.split("-c ", 1)[1].strip()
+    if source.startswith('"'):
+        source = source[1:source.rindex('"')]
+    source = source.replace("'${APP_DIR}'", "'/opt/hjf-services'")
+    # The command must not raise, whatever the material looks like.
+    compile(source, "<unit>", "exec")
+    assert "prepare_tls_material()" in source
+    # The exit code of the command must not depend on the result.
+    assert "sys.exit" not in source
+    """The port that was published must not vanish when TLS cannot start.
+
+    The port decides the public address that was written to .env. Clearing
+    it left the address without a port, which broke the check that follows.
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    # The port is never cleared to announce that TLS cannot start. The only
+    # place where it is emptied is the port search, which assigns it again
+    # right away.
+    for line in script.splitlines():
+        if 'TLS_PORT=""' in line:
+            assert line.strip() == 'TLS_PORT=""', (
+                "the TLS port must not be cleared to announce that the "
+                "certificate is missing"
+            )
+    # Whether the TLS service runs is decided on its own flag.
+    assert "TLS_ENABLED=0" in script
+    assert "TLS_ENABLED=1" in script
+    # The address that was published keeps its port in every case.
+    assert 'set_env_value SITE_URL "https://${PUBLIC_IP}:${TLS_PORT}"' in script
+
+
 def test_the_https_check_uses_a_port_that_is_always_set():
     """The check of the secure address must not build an address without a port.
 
@@ -806,3 +881,21 @@ def test_no_certificate_for_another_address_is_returned(
     path, notes = tls_manager.find_certificate_for_ip(None, "198.51.100.5")
     assert path is None
     assert any("198.51.100.5" in note for note in notes)
+
+
+def test_the_project_is_left_out_even_when_a_process_points_at_it(tmp_path, monkeypatch):
+    """A working directory of a process is not a candidate either.
+
+    On the server a process that listens on one of the neighbour ports had
+    this project as its working directory. That is how this project's own
+    certificate came into the search.
+    """
+    project = tmp_path / "hjf-services"
+    project.mkdir()
+    monkeypatch.setattr(tls_manager, "PROJECT_ROOT", project)
+    monkeypatch.setattr(tls_manager, "_pids_listening_on", lambda port: [4711])
+    monkeypatch.setattr(tls_manager, "_process_cwd", lambda pid: project)
+    monkeypatch.setattr(tls_manager, "_list_systemd_units", lambda: [])
+
+    candidates = tls_manager._candidate_neighbour_dirs()
+    assert project not in candidates

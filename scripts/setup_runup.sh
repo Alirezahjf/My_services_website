@@ -320,7 +320,7 @@ WorkingDirectory=${APP_DIR}
 EnvironmentFile=${APP_DIR}/.env
 Environment=PATH=${APP_DIR}/.venv/bin
 Environment=GUNICORN_PID=%p
-ExecStartPre=${APP_DIR}/.venv/bin/python -c "import sys; sys.path.insert(0, '${APP_DIR}'); from app.services.tls_manager import prepare_tls_material; prepare_tls_material() || True"
+ExecStartPre=${APP_DIR}/.venv/bin/python -c "import sys; sys.path.insert(0, '${APP_DIR}'); from app.services.tls_manager import prepare_tls_material; prepare_tls_material() or print('no TLS material yet; the site starts on plain HTTP')"
 ExecStart=${APP_DIR}/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:${TLS_PORT} ${TLS_ARGS} --access-logfile - --error-logfile - "app:create_app()"
 ExecReload=/bin/kill -s HUP \$MAINPID
 Restart=on-failure

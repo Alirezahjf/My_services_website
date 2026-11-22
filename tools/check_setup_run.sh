@@ -125,8 +125,13 @@ exec "${args[@]}"
 STUB
 cat > "$STUB_BIN/systemctl" <<'STUB'
 #!/usr/bin/env bash
-# In the simulation "systemctl restart <unit>" starts the unit's ExecStart
-# line as a background process; every other call succeeds.
+# In the simulation "systemctl restart <unit>" runs the unit's ExecStartPre
+# lines and then starts the ExecStart line as a background process; every
+# other call succeeds.
+#
+# The ExecStartPre lines are run for real. A command that is not valid —
+# a shell operator inside "python -c", for example — must fail here the
+# way it would fail on the server.
 action="${1:-}"
 shift || true
 if [[ "$action" == "restart" || "$action" == "start" ]]; then
@@ -134,11 +139,20 @@ if [[ "$action" == "restart" || "$action" == "start" ]]; then
     unit="${unit//.service/}"
     file="${SYSTEMD_DIR:-/etc/systemd/system}/${unit}.service"
     [[ -f "$file" ]] || continue
-    exec_line="$(grep -m1 '^ExecStart=' "$file" | sed 's/^ExecStart=//')"
-    [[ -n "$exec_line" ]] || continue
     # The unit uses shell variables; expand them in this shell.
     ( set -a; [[ -f "$APP_DIR/.env" ]] && . "$APP_DIR/.env"; set +a
       cd "$APP_DIR"
+      while read -r pre_line; do
+        pre_line="${pre_line#ExecStartPre=}"
+        [[ -n "$pre_line" ]] || continue
+        if ! eval "$pre_line" >>"$SANDBOX/${unit}.pre.log" 2>&1; then
+          echo "ExecStartPre failed for ${unit}: $pre_line" >&2
+          cat "$SANDBOX/${unit}.pre.log" >&2
+          exit 1
+        fi
+      done < <(grep '^ExecStartPre=' "$file")
+      exec_line="$(grep -m1 '^ExecStart=' "$file" | sed 's/^ExecStart=//')"
+      [[ -n "$exec_line" ]] || continue
       nohup bash -c "$exec_line" >"$SANDBOX/${unit}.log" 2>&1 &
       echo $! > "$SANDBOX/${unit}.pid" )
   done

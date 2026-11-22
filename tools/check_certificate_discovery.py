@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Check that the certificate of this project is never taken for the neighbour's.
+"""Check the certificate discovery on a layout like the one of the server.
 
-On the real server the project lives in ``/opt/hjf-services`` and carries
-its own units, whose names start with ``runup-``. The discovery used to
-recognise those units as the neighbour's, which pointed it at this
-project, where a test certificate for ``127.0.0.1`` was found. That
-certificate never covers the public address, and because the search
-stopped there, the site stayed on plain HTTP.
+The server keeps its own project in ``/opt/hjf-services`` and the
+neighbour's project in ``/root/Desktop/shomarejoo_web``. A process of one
+of the two listens on one of the neighbour ports with the working
+directory of this project, which used to make the search pick the
+certificate of this project.
 
-The check builds that situation and asks for the certificate of the
-neighbour.
+The check builds that layout and asks which certificate is found.
 
 Run it with::
 
@@ -124,13 +122,31 @@ def main() -> int:
             " | ".join(notes),
         )
 
+        # A directory that turns up as the working directory of a process
+        # is left out as well. That is how the project reached the search
+        # on the server.
+        original_dirs = tls_manager._candidate_neighbour_dirs
+        original_cwd = tls_manager._process_cwd
+        original_pids = tls_manager._pids_listening_on
+        tls_manager._pids_listening_on = lambda port: [4711]
+        tls_manager._process_cwd = lambda pid: project
+        tls_manager._candidate_neighbour_dirs = original_dirs
+        try:
+            candidates = original_dirs()
+        finally:
+            tls_manager._pids_listening_on = original_pids
+            tls_manager._process_cwd = original_cwd
+        check(
+            "the project's own directory is left out even when a process points at it",
+            project not in candidates,
+            " | ".join(str(c) for c in candidates),
+        )
+
         # The search does not stop at a certificate that fits another
         # address: it looks on.
-        original_dirs = tls_manager._candidate_neighbour_dirs
         tls_manager._candidate_neighbour_dirs = lambda: [project, neighbour]
         try:
-            found, notes = tls_manager.find_certificate_for_ip(
-                None, "203.0.113.55")
+            found, notes = tls_manager.find_certificate_for_ip(None, "203.0.113.55")
         finally:
             tls_manager._candidate_neighbour_dirs = original_dirs
         check(
@@ -140,11 +156,9 @@ def main() -> int:
         )
 
         # And when nothing fits, it says so instead of picking the wrong one.
-        original_dirs = tls_manager._candidate_neighbour_dirs
         tls_manager._candidate_neighbour_dirs = lambda: [project]
         try:
-            found, notes = tls_manager.find_certificate_for_ip(
-                None, "203.0.113.55")
+            found, notes = tls_manager.find_certificate_for_ip(None, "203.0.113.55")
         finally:
             tls_manager._candidate_neighbour_dirs = original_dirs
         check(

@@ -356,14 +356,14 @@ def _candidate_neighbour_dirs() -> list[Path]:
         if _is_own_unit(unit):
             continue
         workdir = _systemd_working_directory(unit)
-        if workdir and _is_dir(workdir):
+        if workdir and _is_dir(workdir) and not _is_own_directory(workdir):
             candidates.append(workdir)
 
     # 2. The working directory of the process listening on the neighbour ports.
     for port in (9443, 9444, 8080):
         for pid in _pids_listening_on(port):
             cwd = _process_cwd(pid)
-            if cwd and _is_dir(cwd):
+            if cwd and _is_dir(cwd) and not _is_own_directory(cwd):
                 candidates.append(cwd)
 
     # 3. Conventional locations below /root and /srv, /opt.
