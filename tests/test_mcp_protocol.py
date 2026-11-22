@@ -29,14 +29,22 @@ def test_official_mcp_client_initialize_list_call_and_approval(app, tmp_path):
     env["SECRET_KEY"] = "test-secret"
     process = subprocess.Popen([sys.executable, "-m", "uvicorn", "mcp_server:asgi_app", "--host", "127.0.0.1", "--port", str(port)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        for _ in range(80):
+        # The server needs a moment to come up. Waiting for the port to
+        # accept a connection is not enough on a busy machine: the
+        # connection can be refused while the application is still being
+        # set up, and the client then gives up with a connection error
+        # that says nothing about the cause.
+        ready = False
+        for _ in range(300):
+            if process.poll() is not None:
+                raise AssertionError("MCP server exited before accepting the official client")
             try:
-                socket.create_connection(("127.0.0.1", port), timeout=.1).close()
+                socket.create_connection(("127.0.0.1", port), timeout=.5).close()
+                ready = True
                 break
             except OSError:
-                if process.poll() is not None:
-                    raise AssertionError("MCP server exited before accepting the official client")
-                time.sleep(.05)
+                time.sleep(.1)
+        assert ready, "the MCP server did not start in time"
         async def verify():
             async with streamablehttp_client(f"http://127.0.0.1:{port}/mcp", headers={"Authorization": f"Bearer {token}"}) as (read, write, _):
                 async with ClientSession(read, write) as session:
