@@ -132,6 +132,10 @@ cat > "$STUB_BIN/systemctl" <<'STUB'
 # The ExecStartPre lines are run for real. A command that is not valid —
 # a shell operator inside "python -c", for example — must fail here the
 # way it would fail on the server.
+#
+# The environment of the unit is applied to the commands it runs, the way
+# systemd applies it. The helper commands of this stub keep their own
+# path, because the unit narrows it to the virtual environment.
 action="${1:-}"
 shift || true
 if [[ "$action" == "restart" || "$action" == "start" ]]; then
@@ -139,13 +143,24 @@ if [[ "$action" == "restart" || "$action" == "start" ]]; then
     unit="${unit//.service/}"
     file="${SYSTEMD_DIR:-/etc/systemd/system}/${unit}.service"
     [[ -f "$file" ]] || continue
+    stub_path="$PATH"
     # The unit uses shell variables; expand them in this shell.
     ( set -a; [[ -f "$APP_DIR/.env" ]] && . "$APP_DIR/.env"; set +a
       cd "$APP_DIR"
+      unit_env=()
+      while read -r env_line; do
+        env_line="${env_line#Environment=}"
+        [[ -n "$env_line" ]] || continue
+        env_name="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        [[ -n "$env_name" ]] || continue
+        unit_env+=("$env_name=$env_value")
+      done < <(grep '^Environment=' "$file")
       while read -r pre_line; do
         pre_line="${pre_line#ExecStartPre=}"
         [[ -n "$pre_line" ]] || continue
-        if ! eval "$pre_line" >>"$SANDBOX/${unit}.pre.log" 2>&1; then
+        if ! env "${unit_env[@]}" PATH="$stub_path" \
+             bash -c "$pre_line" >>"$SANDBOX/${unit}.pre.log" 2>&1; then
           echo "ExecStartPre failed for ${unit}: $pre_line" >&2
           cat "$SANDBOX/${unit}.pre.log" >&2
           exit 1
@@ -153,7 +168,8 @@ if [[ "$action" == "restart" || "$action" == "start" ]]; then
       done < <(grep '^ExecStartPre=' "$file")
       exec_line="$(grep -m1 '^ExecStart=' "$file" | sed 's/^ExecStart=//')"
       [[ -n "$exec_line" ]] || continue
-      nohup bash -c "$exec_line" >"$SANDBOX/${unit}.log" 2>&1 &
+      nohup env "${unit_env[@]}" PATH="$stub_path" \
+        bash -c "$exec_line" >"$SANDBOX/${unit}.log" 2>&1 &
       echo $! > "$SANDBOX/${unit}.pid" )
   done
 fi

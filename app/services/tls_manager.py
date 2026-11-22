@@ -720,7 +720,27 @@ class CertificateReloader:
         return True
 
 
+def _pid_from_file(path: Path) -> int | None:
+    """Read a process number from a file, if the file holds one."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
+
+
 def _find_gunicorn_master() -> int | None:
+    """Find the process that serves the secure address.
+
+    The file that Gunicorn writes its own process number into is read
+    first. It is the only way to tell the two instances apart: there is
+    one for the plain HTTP port and one for the secure port, and both
+    run the same command line, so a search by command line alone can
+    pick the wrong one.
+    """
+    pid = _pid_from_file(TLS_DIR / "gunicorn.pid")
+    if pid:
+        return pid
     try:
         proc = subprocess.run(
             ["pgrep", "-f", "gunicorn.*app:create_app"],
@@ -733,6 +753,15 @@ def _find_gunicorn_master() -> int | None:
         return None
     pids = [int(p) for p in (proc.stdout or "").split() if p.isdigit()]
     return pids[0] if pids else None
+
+
+def _pid_from_file(path: Path) -> int | None:
+    """Read a process number from a file, if the file holds one."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
 
 
 # ---------------------------------------------------------------------------

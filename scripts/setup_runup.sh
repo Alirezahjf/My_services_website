@@ -183,9 +183,22 @@ chmod 0640 "$APP_DIR/.env"
 # 3. Certificate discovery
 # ---------------------------------------------------------------------------
 
+# Prepare the directory in which the material lives.
+#
+# It belongs to the service user, so the service can read and replace the
+# material without any further help. The parent is prepared as well,
+# because it may not exist yet or may belong to root from an earlier run.
+# The directory also holds the file in which Gunicorn writes its process
+# number, so it has to exist even when there is no certificate.
+prepare_tls_directory() {
+  mkdir -p "$APP_DIR/instance/tls"
+  chown "$APP_USER:$APP_USER" "$APP_DIR/instance" 2>/dev/null || true
+  chown "$APP_USER:$APP_USER" "$APP_DIR/instance/tls" 2>/dev/null || true
+  chmod 0750 "$APP_DIR/instance" "$APP_DIR/instance/tls" 2>/dev/null || true
+}
+
 # Take a copy of the neighbour's certificate into the project's own
 # runtime directory.
-#
 # The certificate usually lives below a home directory that is only
 # readable by root, for example /root/Desktop/<neighbour>/data/tls/. The
 # service user cannot walk through such a directory, so it can neither
@@ -205,10 +218,7 @@ copy_neighbour_certificate() {
   # and replace the material without any further help. The parent is
   # prepared as well, because it may not exist yet or may belong to
   # root from an earlier run.
-  mkdir -p "$APP_DIR/instance/tls"
-  chown "$APP_USER:$APP_USER" "$APP_DIR/instance" 2>/dev/null || true
-  chown "$APP_USER:$APP_USER" "$APP_DIR/instance/tls" 2>/dev/null || true
-  chmod 0750 "$APP_DIR/instance" "$APP_DIR/instance/tls" 2>/dev/null || true
+  prepare_tls_directory
 
   if "$APP_DIR/.venv/bin/python" -c "
 import sys
@@ -282,10 +292,30 @@ else
   TLS_ENABLED=0
 fi
 
+# The units are rewritten on every update. A unit that is failing would
+# otherwise keep restarting itself in a loop while its new content is
+# being written, so the services of this project are stopped first. Only
+# the units of this project are touched.
+log "متوقف کردن سرویس‌های این پروژه پیش از نوشتن واحدها"
+for unit in "$TLS_SERVICE" "$WEB_SERVICE" "$MCP_SERVICE"; do
+  systemctl stop "$unit" >/dev/null 2>&1 || true
+done
+
+# The directory of the material has to exist even when there is no
+# certificate: Gunicorn writes its process number into it.
+prepare_tls_directory
+# A process number left over from an earlier run would point at a
+# process that no longer exists.
+rm -f "$APP_DIR/instance/tls/gunicorn.pid"
+
 cat > "/etc/systemd/system/${WEB_SERVICE}.service" <<UNIT
 [Unit]
 Description=RunUp catalogue (Gunicorn, plain HTTP for the legacy links)
 After=network.target
+# A unit that keeps failing must not restart itself for hours. Five
+# tries are enough to see the problem; the update script starts it again.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -311,6 +341,10 @@ cat > "/etc/systemd/system/${TLS_SERVICE}.service" <<UNIT
 [Unit]
 Description=RunUp catalogue (Gunicorn over TLS)
 After=network.target ${WEB_SERVICE}.service
+# A unit that keeps failing must not restart itself for hours. Five
+# tries are enough to see the problem; the update script starts it again.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -319,9 +353,8 @@ Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${APP_DIR}/.env
 Environment=PATH=${APP_DIR}/.venv/bin
-Environment=GUNICORN_PID=%p
 ExecStartPre=${APP_DIR}/.venv/bin/python -c "import sys; sys.path.insert(0, '${APP_DIR}'); from app.services.tls_manager import prepare_tls_material; prepare_tls_material() or print('no TLS material yet; the site starts on plain HTTP')"
-ExecStart=${APP_DIR}/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:${TLS_PORT} ${TLS_ARGS} --access-logfile - --error-logfile - "app:create_app()"
+ExecStart=${APP_DIR}/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:${TLS_PORT} ${TLS_ARGS} --pid ${APP_DIR}/instance/tls/gunicorn.pid --access-logfile - --error-logfile - "app:create_app()"
 ExecReload=/bin/kill -s HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -339,6 +372,10 @@ cat > "/etc/systemd/system/${MCP_SERVICE}.service" <<UNIT
 [Unit]
 Description=RunUp official MCP Streamable HTTP server
 After=network.target ${WEB_SERVICE}.service
+# A unit that keeps failing must not restart itself for hours. Five
+# tries are enough to see the problem; the update script starts it again.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

@@ -899,3 +899,59 @@ def test_the_project_is_left_out_even_when_a_process_points_at_it(tmp_path, monk
 
     candidates = tls_manager._candidate_neighbour_dirs()
     assert project not in candidates
+
+
+def test_the_tls_unit_does_not_set_a_wrong_process_number():
+    """The systemd placeholder %p is the unit name, not a process number.
+
+    Gunicorn reads GUNICORN_PID and expects a number. With the unit name
+    it refused to start: "invalid literal for int() with base 10:
+    'hjf-services-tls'".
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    assert "GUNICORN_PID=%p" not in script
+    # The process number comes from the file Gunicorn writes itself.
+    assert "--pid ${APP_DIR}/instance/tls/gunicorn.pid" in script
+
+
+def test_the_process_number_is_read_from_the_file_gunicorn_writes():
+    """Two Gunicorn instances run the same command line.
+
+    A search by command line alone can pick the one that serves plain
+    HTTP, and the reload signal would go to the wrong process. The file
+    that Gunicorn writes tells them apart.
+    """
+    from app.services import tls_manager
+
+    pid_file = tmp_pid = Path("/tmp/runup-test-gunicorn.pid")
+    try:
+        pid_file.write_text("4242\n")
+        assert tls_manager._pid_from_file(pid_file) == 4242
+    finally:
+        pid_file.unlink(missing_ok=True)
+    assert tls_manager._pid_from_file(tmp_pid) is None
+    assert tls_manager._pid_from_file(Path("/nonexistent/pid")) is None
+
+
+def test_the_services_are_stopped_before_the_units_are_rewritten():
+    """A unit that keeps failing must not restart itself in a loop.
+
+    On the server the unit with the broken command restarted 278 times
+    before the new file was written.
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    assert "systemctl stop" in script
+    # The stop happens before the units are written.
+    assert script.index("systemctl stop") < script.index('${WEB_SERVICE}.service" <<UNIT')
+    # And a unit that keeps failing stops after a handful of tries.
+    assert "StartLimitBurst=5" in script
+    assert "StartLimitIntervalSec=120" in script
+
+
+def test_the_material_directory_exists_even_without_a_certificate():
+    """Gunicorn writes its process number into that directory."""
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    assert "prepare_tls_directory" in script
+    # It is called before the units are written, not only when a
+    # certificate was found.
+    assert script.count("prepare_tls_directory") >= 2
