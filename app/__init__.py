@@ -48,12 +48,17 @@ def create_app(test_config=None):
 
     @app.context_processor
     def global_content():
+        from .services.public_origin import canonical_url, public_url, request_is_legacy_http, secure_origin
         settings = {row.key: row.value for row in SiteSetting.query.all()}
         socials = SocialLink.query.filter_by(is_published=True).order_by(SocialLink.position).all()
         pages = CustomPage.query.filter_by(status="published", menu_links_enabled=True).order_by(CustomPage.menu_order, CustomPage.title).all()
         custom_items = MenuItem.query.filter_by(is_enabled=True, parent_id=None).order_by(MenuItem.location, MenuItem.position).all()
         return {"site": settings, "socials": socials, "setting": lambda key, default="": settings.get(key) or default,
                 "csp_nonce": g.get("csp_nonce", ""),
+                "canonical_url": canonical_url,
+                "public_url": public_url,
+                "secure_origin": secure_origin,
+                "legacy_http": request_is_legacy_http(),
                 "linked_pages": lambda content_id: CustomPage.query.filter_by(parent_content_id=content_id, status="published").order_by(CustomPage.menu_order, CustomPage.title).all(),
                 "page_menus": {location: [p for p in pages if getattr(p, "show_in_" + location)] for location in ("main", "hamburger", "footer")},
                 "custom_menu_items": custom_items}
@@ -83,6 +88,7 @@ def create_app(test_config=None):
 
     @app.after_request
     def security_headers(response):
+        from .services.https_upgrade import csp_connect_sources
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -90,7 +96,17 @@ def create_app(test_config=None):
         script_source = "script-src 'self'"
         if g.get("csp_nonce"):
             script_source += f" 'nonce-{g.csp_nonce}'"
-        response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; {script_source}; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+        policy = (f"default-src 'self'; img-src 'self' data:; media-src 'self'; "
+                  f"style-src 'self' 'unsafe-inline'; {script_source}; font-src 'self'; "
+                  f"connect-src 'self'; object-src 'none'; base-uri 'self'; "
+                  f"form-action 'self'; frame-ancestors 'none'")
+        # The legacy-HTTP page probes the secure origin from the browser. When
+        # that origin is a different host it has to be allowed explicitly;
+        # nothing else about the strict policy changes.
+        secure = app.config.get("PUBLIC_ORIGIN") or ""
+        if secure and request.scheme != "https":
+            policy = csp_connect_sources(policy, secure)
+        response.headers.setdefault("Content-Security-Policy", policy)
         if request.path.startswith("/admin"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Robots-Tag"] = "noindex, nofollow"
@@ -141,6 +157,47 @@ def create_app(test_config=None):
         from scripts.seed_data import seed
         seed()
         click.echo("داده‌های اولیه ثبت/به‌روز شد.")
+
+    @app.cli.command("status")
+    @click.option("--cert-path", default=None, help="مسیر دستی فایل گواهی همسایه.")
+    def status_command(cert_path):
+        """Show the public address of the site and the state of its HTTPS."""
+        from .services.tls_manager import collect_status
+
+        cert_path = cert_path or app.config.get("TLS_CERT_PATH") or None
+        public_port = app.config.get("HTTPS_PUBLIC_PORT")
+        http_port = app.config.get("HTTP_PUBLIC_PORT")
+        origin = app.config.get("PUBLIC_ORIGIN") or app.config.get("SITE_URL") or ""
+
+        state = collect_status(
+            explicit_cert_path=cert_path,
+            public_port=public_port,
+            http_port=http_port,
+            site_url=origin,
+        )
+
+        click.echo("وضعیت سایت RunUp")
+        click.echo("─────────────────")
+        if state.site_url:
+            click.echo(f"نشانی سایت: {state.site_url}")
+        else:
+            click.echo("نشانی سایت: در پیکربندی ثبت نشده است.")
+
+        if state.enabled and state.certificate:
+            click.echo("HTTPS: روشن")
+            click.echo(f"اعتبار گواهی: {state.certificate.expires_in} (تا {state.certificate.not_after.strftime('%Y-%m-%d %H:%M')} UTC)")
+            if state.source_path:
+                click.echo(f"منبع گواهی: {state.source_path}")
+            if state.public_port:
+                click.echo(f"درگاه HTTPS: {state.public_port}")
+            if state.http_port:
+                click.echo(f"لینک قدیمی HTTP: درگاه {state.http_port} (به نشانی امن هدایت می‌شود)")
+        else:
+            click.echo("HTTPS: خاموش")
+            click.echo(f"دلیل: {state.reason}")
+            if state.detail:
+                click.echo(f"توضیح: {state.detail}")
+            click.echo("اقدام لازم: فایل گواهی همسایه باید در دسترس و خوانا باشد؛ سایت خودش هر چند دقیقه دوباره بررسی می‌کند.")
 
     logging.basicConfig(level=app.config["LOG_LEVEL"], format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     return app

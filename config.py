@@ -43,6 +43,17 @@ class Config:
     RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
     RATELIMIT_HEADERS_ENABLED = True
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    # --- Shared-certificate TLS -------------------------------------------
+    # Path to the certificate bundle published by the neighbouring application
+    # (key first, then certificate). When set, the site serves TLS itself.
+    TLS_CERT_PATH = os.getenv("TLS_CERT_PATH", "").strip()
+    # Public HTTPS port and the separate HTTP port kept for the legacy link.
+    HTTPS_PUBLIC_PORT = int(os.getenv("HTTPS_PUBLIC_PORT", "9900"))
+    HTTP_PUBLIC_PORT = int(os.getenv("HTTP_PUBLIC_PORT", "19900"))
+    # Public origin of the site, used for canonical/OG tags and redirects.
+    PUBLIC_ORIGIN = os.getenv("PUBLIC_ORIGIN", "").rstrip("/")
+    # How often (seconds) the certificate watcher re-reads the bundle.
+    TLS_WATCH_INTERVAL = int(os.getenv("TLS_WATCH_INTERVAL", "300"))
 
 
 class TestConfig(Config):

@@ -26,7 +26,9 @@
 
 ## شروع سریع روی Ubuntu
 
-برای نصب آزمایشی کامل این شاخه روی Ubuntu و اجرای Gunicorn روی IP عمومی پورت 9900، می‌توانید اسکریپت `deploy/setup-public-test.sh` را با sudo اجرا کنید. این اسکریپت وابستگی‌ها، دیتابیس، مدیر و سرویس systemd را می‌سازد و اطلاعات ورود را فقط در فایل root-only نمایش می‌دهد. برای Production، HTTPS با دامنه توصیه می‌شود؛ اگر فقط IP دارید، `scripts/enable_https_ip.sh` گواهی کوتاه‌عمر عمومی Let's Encrypt را می‌گیرد، Nginx و تمدید خودکار را تنظیم می‌کند، و HTTPS را هم روی پورت استاندارد 443 و هم روی `:9900` ارائه می‌دهد. Gunicorn به loopback پورت 19900 و MCP به loopback پورت 9901 منتقل می‌شوند.
+برای نصب کامل روی Ubuntu، اسکریپت `deploy/setup-public-test.sh` را با sudo اجرا کنید؛ وابستگی‌ها، دیتابیس، مدیر و سرویس systemd ساخته می‌شوند و اطلاعات ورود فقط در فایل root-only نمایش داده می‌شود.
+
+**HTTPS برای سایتی که با IP باز می‌شود:** دستور آپدیت همیشگی `sudo bash /opt/hjf-services/scripts/setup_runup.sh` است. این اسکریپت گواهی معتبر Let's Encrypt را از همان گواهی‌ای می‌خواند که پروژه همسایه روی همین سرور تمدید می‌کند و خودش TLS را روی پورت `:9900` ارائه می‌دهد. هیچ وب‌سروری نصب نمی‌شود، درگاه‌های ۸۰ و ۴۴۳ دست نمی‌خورند و فایروال تغییر نمی‌کند. جزئیات کامل در [`docs/HTTPS_SETUP.md`](docs/HTTPS_SETUP.md) است.
 
 ### ۱. پیش‌نیازها
 
@@ -93,8 +95,8 @@ gunicorn -w 4 -b 0.0.0.0:9900 "app:create_app()"
 نمونه سرویس systemd و Nginx در پوشه `deploy/` قرار دارد. دستورهای کامل و مرحله‌به‌مرحله Ubuntu، Gunicorn، systemd، Nginx، Certbot و HTTPS در [`docs/SERVER_ONLINE.md`](docs/SERVER_ONLINE.md) آمده است. قبل از عمومی‌کردن سایت:
 
 1. `SECRET_KEY` تصادفی و قوی تنظیم شود.
-2. برای دامنه، `COOKIE_SECURE=true` و `SITE_URL=https://your-domain.ir` تنظیم و گواهی Certbot فعال شود؛ اگر فعلاً فقط IPv4 عمومی دارید، `scripts/enable_https_ip.sh` هم گواهی معتبر IP می‌گیرد و Nginx را امن پیکربندی می‌کند.
-3. گواهی IP Let's Encrypt از پروفایل کوتاه‌عمر ۱۶۰ساعته است؛ تایمر تمدید خودکار را فعال نگه دارید. جزئیات و دستور اجرا در [`docs/SERVER_ONLINE.md`](docs/SERVER_ONLINE.md) است.
+2. برای دامنه، `COOKIE_SECURE=true` و `PUBLIC_ORIGIN=https://your-domain.ir` تنظیم و گواهی Certbot فعال شود؛ اگر فقط IPv4 عمومی دارید، `scripts/setup_runup.sh` گواهی معتبر IP را به‌صورت مشترک با پروژه همسایه استفاده می‌کند.
+3. تایمر تمدید گواهی (`runup-cert-refresh.timer`) فعال بماند. جزئیات و دستور اجرا در [`docs/HTTPS_SETUP.md`](docs/HTTPS_SETUP.md) است.
 4. PostgreSQL و Redis برای Rate Limit چند Worker پیکربندی شود.
 5. مالکیت `instance/uploads` و دیتابیس محدود به کاربر سرویس باشد.
 6. پشتیبان‌گیری و بازیابی آزمون شود.
