@@ -22,7 +22,11 @@
   <link rel="preload" href="{{ url_for('static',filename='fonts/Vazirmatn-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static',filename='css/main.css') }}">
   {% block head %}{% endblock %}
-  <noscript><style>.reveal,[data-page-enter]>*,.hero-visual[data-page-enter]{opacity:1;transform:none}</style></noscript>
+  <noscript><style>.reveal,.has-reveal .reveal,[data-page-enter]>*,.hero-visual[data-page-enter]{opacity:1;transform:none}</style></noscript>
+  <!-- The script is loaded in the head so that it runs before the body is
+       painted. It marks the page as animated and the entrance animation
+       then starts without the content ever appearing and disappearing. -->
+  <script src="{{ url_for('static',filename='js/main.js') }}" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="scroll-progress" data-scroll-progress aria-hidden="true"></div>
@@ -67,7 +71,6 @@
     </div>
     <div class="container footer-bottom"><span>{{ setting('copyright_text') }}</span><a href="https://github.com/Alirezahjf" target="_blank" rel="noopener">GitHub / Alirezahjf ↗</a></div>
   </footer>
-  <script src="{{ url_for('static',filename='js/main.js') }}" defer></script>
   {% if legacy_http and secure_origin() %}
   <script src="{{ url_for('static',filename='js/https-upgrade.js') }}" data-secure-origin="{{ secure_origin() }}" defer></script>
   {% endif %}

@@ -26,21 +26,47 @@
   });
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const revealItems = document.querySelectorAll('.reveal');
-  if ('IntersectionObserver' in window && !reducedMotion) {
-    const observer = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('is-visible');
-          observer.unobserve(entry.target);
-        }
+  if (revealItems.length) {
+    if ('IntersectionObserver' in window && !reducedMotion) {
+      // The elements are visible by default; only when the observer is
+      // available they are hidden first and faded in while they scroll
+      // into view. Without JavaScript the content stays readable.
+      document.documentElement.classList.add('has-reveal');
+
+      // The elements are watched through their closest grid or list, not
+      // one by one. A grid of thirteen cards would otherwise need thirteen
+      // separate observations and thirteen separate class changes; with
+      // the container the whole group is revealed in one step.
+      const groups = new Map();
+      revealItems.forEach(item => {
+        const group = item.parentElement || item;
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push(item);
       });
-    }, { threshold: 0.08 });
-    revealItems.forEach((item, index) => {
-      item.style.transitionDelay = `${(index % 3) * 60}ms`;
-      observer.observe(item);
-    });
-  } else {
-    revealItems.forEach(item => item.classList.add('is-visible'));
+
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (!entry.isIntersecting) return;
+          const items = groups.get(entry.target) || [];
+          items.forEach((item, index) => {
+            item.style.transitionDelay = `${(index % 3) * 60}ms`;
+            item.classList.add('is-visible');
+          });
+          observer.unobserve(entry.target);
+        });
+      }, { threshold: 0.08, rootMargin: '0px 0px -8% 0px' });
+      groups.forEach((items, group) => observer.observe(group));
+
+      // Anything that never entered the viewport - because the page is
+      // short, the observer missed it, or the browser restored a scroll
+      // position - is revealed after a moment so that no content can stay
+      // permanently invisible.
+      window.setTimeout(() => {
+        revealItems.forEach(item => item.classList.add('is-visible'));
+      }, 2500);
+    } else {
+      revealItems.forEach(item => item.classList.add('is-visible'));
+    }
   }
   const dialog = document.querySelector('[data-lightbox-dialog]');
   if (dialog) {
@@ -77,7 +103,10 @@
   'use strict';
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
   document.documentElement.classList.add('motion-ready');
-  requestAnimationFrame(() => document.body.classList.add('page-is-ready'));
+  // The class is added straight away, before the first paint, so that the
+  // entrance animation starts from the hidden state instead of the content
+  // appearing and then disappearing again.
+  document.documentElement.classList.add('page-is-ready');
   const progress = document.querySelector('[data-scroll-progress]');
   const parallax = [...document.querySelectorAll('[data-parallax]')];
   if (progress || (parallax.length && !reduce.matches && window.innerWidth > 820)) {
@@ -104,10 +133,26 @@
   if (counters.length && 'IntersectionObserver' in window && !reduce.matches) {
     const counterObserver = new IntersectionObserver(entries => entries.forEach(entry => {
       if (!entry.isIntersecting) return;
-      const el = entry.target, target = Number(el.dataset.count), start = performance.now();
+      const el = entry.target;
+      // The target comes from the page and must be a plain, non-negative
+      // number. Anything else ("None", "", a negative value) would be
+      // rendered as NaN or as a negative count, so it is rejected here and
+      // the server-rendered value stays untouched.
+      const target = Number(el.dataset.count);
+      if (!Number.isFinite(target) || target < 0) {
+        el.removeAttribute('data-count');
+        counterObserver.unobserve(el);
+        return;
+      }
+      const start = performance.now();
       const tick = now => {
-        const ratio = Math.min(1, (now - start) / 700);
-        el.textContent = new Intl.NumberFormat('fa-IR').format(Math.round(target * (1 - Math.pow(1 - ratio, 3))));
+        // The clock can jump backwards, so the progress is clamped to the
+        // 0..1 range. Without the clamp a negative progress flips the sign
+        // of the easing curve and the counter runs below zero.
+        const elapsed = Math.max(0, now - start);
+        const ratio = Math.min(1, elapsed / 700);
+        const eased = target * (1 - Math.pow(1 - ratio, 3));
+        el.textContent = new Intl.NumberFormat('fa-IR').format(Math.max(0, Math.round(eased)));
         if (ratio < 1) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick); counterObserver.unobserve(el);

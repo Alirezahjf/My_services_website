@@ -65,5 +65,16 @@
   } catch (e) {
     /* storage is optional. */
   }
-  attempt();
+
+  // The check starts after the page has painted. The visitor sees the
+  // content first and the move to the secure address happens a moment
+  // later, so the probe never delays the first paint of the page.
+  var start = function () { attempt(); };
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(start, { timeout: 1500 });
+  } else if (document.readyState === 'complete') {
+    window.setTimeout(start, 0);
+  } else {
+    window.addEventListener('load', function () { window.setTimeout(start, 0); });
+  }
 })();

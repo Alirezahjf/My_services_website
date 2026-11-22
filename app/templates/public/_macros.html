@@ -26,7 +26,7 @@
     </div>
     <div class="product-card-content">
       <div class="product-card-top"><span class="pill pill-soft">{{ product.category.name if product.category else 'راهکار نرم‌افزاری' }}</span><span class="product-type">{{ 'معرفی اولیه · در حال توسعه' if product.commercial_status=='concept' else {'ai':'هوش مصنوعی','automation':'اتوماسیون','library':'کتابخانه','infrastructure':'زیرساخت','service':'سرویس','software':'نرم‌افزار'}.get(product.product_type,'نرم‌افزار') }}</span></div>
-      <div class="product-card-body"><h3>{{ product.name }}</h3><p class="product-tagline">{{ product.tagline }}</p><p>{{ product.short_description }}</p></div>
+      <div class="product-card-body"><h3>{{ product.name }}</h3><p class="product-tagline">{{ product.tagline|text_or_empty }}</p><p>{{ product.short_description|text_or_empty }}</p></div>
       {% set verified_features=product.features|selectattr('is_published')|selectattr('verification_status','equalto','verified')|list %}
       {% if verified_features %}<ul class="mini-features">{% for feature in verified_features[:3] %}<li>{{ icon('check',16) }}<span>{{ feature.title }}</span></li>{% endfor %}</ul>{% endif %}
       <div class="product-card-footer"><span>مشاهده جزئیات و پیش‌نیازها</span><span class="round-arrow" aria-hidden="true">↙</span></div>

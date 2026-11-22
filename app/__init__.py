@@ -73,6 +73,22 @@ def create_app(test_config=None):
         from .services.utils import persian_digits
         return persian_digits(value.strftime("%Y/%m/%d %H:%M")) if value else "—"
 
+    @app.template_filter("text_or_empty")
+    def text_or_empty(value):
+        """Render a text column, never the string "None".
+
+        Every description, summary and tag column is nullable. When an
+        editor saves a record without a text, Jinja would print the Python
+        value "None" straight into the page. This filter turns any missing
+        or blank value into an empty string so that the page only ever
+        shows real content.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
     @app.template_filter("safe_html")
     def safe_html(value):
         return Markup(value or "")
@@ -89,6 +105,7 @@ def create_app(test_config=None):
     @app.after_request
     def security_headers(response):
         from .services.https_upgrade import csp_connect_sources
+        from .services.public_origin import secure_origin
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -103,9 +120,10 @@ def create_app(test_config=None):
         # The legacy-HTTP page probes the secure origin from the browser. When
         # that origin is a different host it has to be allowed explicitly;
         # nothing else about the strict policy changes.
-        secure = app.config.get("PUBLIC_ORIGIN") or ""
-        if secure and request.scheme != "https":
-            policy = csp_connect_sources(policy, secure)
+        if request.scheme != "https":
+            secure = secure_origin()
+            if secure:
+                policy = csp_connect_sources(policy, secure)
         response.headers.setdefault("Content-Security-Policy", policy)
         if request.path.startswith("/admin"):
             response.headers["Cache-Control"] = "no-store"
