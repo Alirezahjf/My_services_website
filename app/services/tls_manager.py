@@ -651,20 +651,55 @@ def collect_status(
 
     path, notes = find_certificate(explicit_cert_path)
     if path is None:
+        return _status_from_local_copy(status, notes)
+
+    status.source_path = str(path)
+    try:
+        info = read_certificate(path)
+    except CertificateError as exc:
+        # The neighbour's file may be out of reach for the service user.
+        # The copy in the project's own directory is what the service
+        # serves, so that one is asked instead.
+        fallback = _status_from_local_copy(status, [str(exc)])
+        if fallback.enabled:
+            return fallback
+        status.enabled = False
+        status.reason = "گواهی خوانده نشد"
+        status.detail = str(exc)
+        return status
+
+    return _status_with_certificate(status, info)
+
+
+def _status_from_local_copy(status: TlsStatus, notes: list[str]) -> TlsStatus:
+    """Describe the state from the copy in the project's own directory.
+
+    The neighbour's certificate can sit behind a directory that the
+    service user cannot enter. The copy that the setup script took is
+    enough to say whether the site serves HTTPS.
+    """
+    chain_path = TLS_DIR / "fullchain.pem"
+    key_path = TLS_DIR / "privkey.pem"
+    if not chain_path.is_file() or not key_path.is_file():
         status.enabled = False
         status.reason = "گواهی همسایه پیدا نشد"
         status.detail = " ".join(notes)
         return status
 
-    status.source_path = str(path)
     try:
-        info = read_certificate(path)
+        info = read_certificate(chain_path)
     except CertificateError as exc:
         status.enabled = False
         status.reason = "گواهی خوانده نشد"
         status.detail = str(exc)
         return status
 
+    status.source_path = str(chain_path)
+    return _status_with_certificate(status, info)
+
+
+def _status_with_certificate(status: TlsStatus, info: CertificateInfo) -> TlsStatus:
+    """Fill in the status from a certificate that was read."""
     status.certificate = info
     if info.is_expired:
         status.enabled = False
@@ -672,8 +707,8 @@ def collect_status(
         status.detail = f"اعتبار گواهی به پایان رسیده است ({info.expires_in})."
         return status
 
-    if site_url:
-        host = _host_from_url(site_url)
+    if status.site_url:
+        host = _host_from_url(status.site_url)
         if host and not certificate_covers_ip(info, host):
             status.enabled = False
             status.reason = "گواهی برای نشانی این سایت نیست"
@@ -744,11 +779,16 @@ def _split_bundle(bundle: Path) -> tuple[bytes, bytes]:
 def materialise_tls_material(
     bundle_path: Path | str,
     tls_dir: Path | str | None = None,
+    owner: str | None = None,
 ) -> tuple[Path, Path]:
     """Write the split key and chain for Gunicorn.
 
     The files are written atomically (write to a temporary file, then rename)
     so Gunicorn never reads a half-written file.
+
+    ``owner`` names the user that should own the files. It matters when the
+    copy is taken with more rights than the service has: without it the
+    service would find a private key it cannot read.
     """
     bundle_path = Path(bundle_path)
     target_dir = Path(tls_dir) if tls_dir else TLS_DIR
@@ -764,6 +804,7 @@ def materialise_tls_material(
         os.chmod(tmp, mode)
         os.replace(tmp, path)
 
+    _apply_owner(owner, chain_path, key_path)
     return chain_path, key_path
 
 

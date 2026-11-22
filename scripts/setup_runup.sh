@@ -183,77 +183,49 @@ chmod 0640 "$APP_DIR/.env"
 # 3. Certificate discovery
 # ---------------------------------------------------------------------------
 
-# Make the neighbour's certificate readable by the service user.
+# Take a copy of the neighbour's certificate into the project's own
+# runtime directory.
 #
 # The certificate usually lives below a home directory that is only
 # readable by root, for example /root/Desktop/<neighbour>/data/tls/. The
 # service user cannot walk through such a directory, so it can neither
-# read the file nor see that it exists.
+# read the file nor see that it exists. The copy is therefore taken with
+# the rights this script runs with, and the service user receives the
+# copy, not the neighbour's file.
 #
-# Only the way to the file is opened, and only for as long as it is
-# needed: every directory that really blocks the service user gets the
-# execute bit for others, and the original mode is put back at the end.
-# Nothing inside the neighbour's project is written, moved or deleted, and
-# the certificate file itself only receives the read bit for others.
-#
-# The copy that Gunicorn actually serves is made *while* the way is open,
-# and the original modes are restored afterwards. Doing it in the other
-# order would close the door before the copy is taken.
-grant_certificate_access() {
-  local cert_file="$1" dir mode restored=() dir_path entry path original
+# Nothing inside the neighbour's project is written, moved or deleted:
+# the file is only read. The copy lands in the project's own directory
+# and is handed to the service user, which is the only party that ever
+# reads it.
+copy_neighbour_certificate() {
+  local cert_file="$1"
   [[ -f "$cert_file" ]] || return 1
 
-  # Open the way to the file, remembering the original modes. The walk stops
-  # at the root, which every user may enter anyway.
-  dir_path="$(dirname "$cert_file")"
-  while [[ "$dir_path" != "/" && -n "$dir_path" ]]; do
-    if ! runuser -u "$APP_USER" -- test -x "$dir_path" 2>/dev/null; then
-      mode="$(stat -c '%a' "$dir_path")"
-      chmod o+x "$dir_path"
-      restored+=("$dir_path:$mode")
-    fi
-    dir_path="$(dirname "$dir_path")"
-  done
-
-  # Open the file itself for reading.
-  if ! runuser -u "$APP_USER" -- test -r "$cert_file"; then
-    mode="$(stat -c '%a' "$cert_file")"
-    chmod o+r "$cert_file"
-    restored+=("$cert_file:$mode")
-  fi
-
-  if runuser -u "$APP_USER" -- test -r "$cert_file"; then
-    log "خواندن گواهی همسایه برای کاربر سرویس ممکن شد."
-  else
-    warn "کاربر سرویس همچنان نمی‌تواند فایل گواهی همسایه را بخواند؛ سایت روی HTTP می‌ماند."
-  fi
-
-  # Take the copy while the way is still open. The copy lands in the
-  # project's own runtime directory; the neighbour's file is only read.
-  local copied=1
+  # The directory belongs to the service user, so the service can read
+  # and replace the material without any further help. The parent is
+  # prepared as well, because it may not exist yet or may belong to
+  # root from an earlier run.
   mkdir -p "$APP_DIR/instance/tls"
-  if runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" -c "
+  chown "$APP_USER:$APP_USER" "$APP_DIR/instance" 2>/dev/null || true
+  chown "$APP_USER:$APP_USER" "$APP_DIR/instance/tls" 2>/dev/null || true
+  chmod 0750 "$APP_DIR/instance" "$APP_DIR/instance/tls" 2>/dev/null || true
+
+  if "$APP_DIR/.venv/bin/python" -c "
 import sys
 sys.path.insert(0, '$APP_DIR')
 from app.services.tls_manager import materialise_tls_material
-materialise_tls_material('$cert_file', '$APP_DIR/instance/tls')
+materialise_tls_material('$cert_file', '$APP_DIR/instance/tls', owner='$APP_USER')
 " 2>/dev/null; then
-    copied=0
-  else
-    warn "آماده‌سازی فایل گواهی ناموفق بود؛ سایت روی HTTP بالا می‌ماند."
-    rm -f "$APP_DIR/instance/tls/fullchain.pem" "$APP_DIR/instance/tls/privkey.pem"
+    # The chain is world readable, the private key stays with the service
+    # user only.
+    chmod 0644 "$APP_DIR/instance/tls/fullchain.pem" 2>/dev/null || true
+    chmod 0600 "$APP_DIR/instance/tls/privkey.pem" 2>/dev/null || true
+    return 0
   fi
 
-  # Put the original modes back now that the copy exists.
-  for entry in "${restored[@]:-}"; do
-    [[ -n "$entry" ]] || continue
-    path="${entry%:*}"
-    original="${entry##*:}"
-    [[ -e "$path" ]] || continue
-    chmod "$original" "$path" 2>/dev/null || true
-  done
-
-  [[ "$copied" == "0" ]]
+  warn "آماده‌سازی فایل گواهی ناموفق بود؛ سایت روی HTTP بالا می‌ماند."
+  rm -f "$APP_DIR/instance/tls/fullchain.pem" "$APP_DIR/instance/tls/privkey.pem"
+  return 1
 }
 
 log "پیدا کردن گواهی همسایه"
@@ -289,20 +261,10 @@ if [[ -z "$CERT_FOUND" ]]; then
 else
   log "گواهی پیدا شد: $CERT_FOUND"
   set_env_value TLS_CERT_PATH "$CERT_FOUND"
-  # The neighbour's file must be readable by the service user. The neighbour's
-  # data is never changed: only the permission to traverse the directories
-  # on the way to the file and to read the file itself are opened. The
-  # directories are only touched when they really block the service user,
-  # and the original mode is restored afterwards.
-  #
-  # The copy that Gunicorn serves is taken while the way is open and lives
-  # in the project's own runtime directory.
-  if grant_certificate_access "$CERT_FOUND"; then
-    chown -R "$APP_USER:$APP_USER" "$APP_DIR/instance/tls" 2>/dev/null || true
-    # The chain is world readable, the private key stays with the service
-    # user only.
-    chmod 0644 "$APP_DIR/instance/tls/fullchain.pem" 2>/dev/null || true
-    chmod 0600 "$APP_DIR/instance/tls/privkey.pem" 2>/dev/null || true
+  # The neighbour's file is only read. The copy that Gunicorn serves lives
+  # in the project's own runtime directory and belongs to the service user,
+  # so the service never needs to reach into the neighbour's project.
+  if copy_neighbour_certificate "$CERT_FOUND"; then
     log "فایل‌های گواهی برای Gunicorn آماده شد."
   fi
 fi
@@ -316,13 +278,19 @@ log "نوشتن سرویس‌های systemd"
 # --certfile to every port it binds, so a single process cannot serve plain
 # HTTP on one port and TLS on another. The plain-HTTP instance keeps the old
 # links working; the TLS instance carries the certificate.
+#
+# TLS_PORT keeps its value in every case: it is the port that was chosen
+# for HTTPS and is written to .env. Whether the TLS service is actually
+# started is a separate question, and it is kept in TLS_ENABLED. Clearing
+# TLS_PORT would break the address that was just published.
 TLS_ARGS=""
+TLS_ENABLED=1
 if [[ -s "$APP_DIR/instance/tls/fullchain.pem" && -s "$APP_DIR/instance/tls/privkey.pem" ]]; then
   TLS_ARGS="--certfile ${APP_DIR}/instance/tls/fullchain.pem --keyfile ${APP_DIR}/instance/tls/privkey.pem"
   log "سرویس با TLS روی درگاه ${TLS_PORT} بالا می‌آید."
 else
   warn "مدرک گواهی آماده نیست؛ سایت فقط روی HTTP درگاه ${LEGACY_HTTP_PORT} بالا می‌ماند."
-  TLS_PORT=""
+  TLS_ENABLED=0
 fi
 
 cat > "/etc/systemd/system/${WEB_SERVICE}.service" <<UNIT
@@ -349,7 +317,7 @@ ReadWritePaths=${APP_DIR}/instance ${APP_DIR}/backups
 WantedBy=multi-user.target
 UNIT
 
-if [[ -n "$TLS_PORT" ]]; then
+if [[ "$TLS_ENABLED" == "1" ]]; then
 cat > "/etc/systemd/system/${TLS_SERVICE}.service" <<UNIT
 [Unit]
 Description=RunUp catalogue (Gunicorn over TLS)
@@ -404,7 +372,7 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-if [[ -n "$TLS_PORT" ]]; then
+if [[ "$TLS_ENABLED" == "1" ]]; then
   systemctl enable "$WEB_SERVICE" "$TLS_SERVICE" "$MCP_SERVICE" >/dev/null 2>&1 || true
 else
   systemctl enable "$WEB_SERVICE" "$MCP_SERVICE" >/dev/null 2>&1 || true
@@ -468,7 +436,7 @@ runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/flask" --app run.py seed-content
 # ---------------------------------------------------------------------------
 
 log "راه‌اندازی مجدد سرویس‌ها"
-if [[ -n "$TLS_PORT" ]]; then
+if [[ "$TLS_ENABLED" == "1" ]]; then
   systemctl restart "$WEB_SERVICE" "$TLS_SERVICE" "$MCP_SERVICE"
 else
   systemctl restart "$WEB_SERVICE" "$MCP_SERVICE"
@@ -476,7 +444,7 @@ fi
 
 sleep 4
 systemctl is-active --quiet "$WEB_SERVICE" || { journalctl -u "$WEB_SERVICE" -n 40 --no-pager >&2 || true; die "سرویس سایت بالا نیامد."; }
-if [[ -n "$TLS_PORT" ]]; then
+if [[ "$TLS_ENABLED" == "1" ]]; then
   systemctl is-active --quiet "$TLS_SERVICE" || { journalctl -u "$TLS_SERVICE" -n 40 --no-pager >&2 || true; die "سرویس HTTPS بالا نیامد."; }
 fi
 

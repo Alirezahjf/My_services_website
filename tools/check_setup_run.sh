@@ -242,4 +242,41 @@ SERVED="$(echo | openssl s_client -connect "127.0.0.1:${CHOSEN_TLS_PORT}" -serve
 EXPECTED="$(openssl x509 -in "$SANDBOX/neighbour/data/tls/trusted.pem" -noout -fingerprint 2>/dev/null || true)"
 [[ -n "$SERVED" && "$SERVED" == "$EXPECTED" ]] || die "گواهی ارائه‌شده با گواهی همسایه یکی نیست."
 
+# ---------------------------------------------------------------------------
+# The same run with a neighbour whose certificate sits behind a closed
+# directory, the way it does on the real server under /root.
+# ---------------------------------------------------------------------------
+log "اجرای دوباره با گواهی همسایه پشت پوشه بسته"
+CLOSED="$SANDBOX/closed"
+mkdir -p "$CLOSED/data/tls"
+cp "$SANDBOX/neighbour/data/tls/trusted.pem" "$CLOSED/data/tls/trusted.pem"
+chmod 0700 "$CLOSED"
+chmod 0600 "$CLOSED/data/tls/trusted.pem"
+
+rm -rf "$SANDBOX/project/instance/tls"
+export CERT_PATH="$CLOSED/data/tls/trusted.pem"
+bash "$SANDBOX/setup_runup.sh" 2>&1 | tail -30 || die "اسکریپت راه‌اندازی با گواهی بسته شکست خورد."
+
+[[ -s "$SANDBOX/project/instance/tls/fullchain.pem" ]] || die "زنجیره گواهی بسته ساخته نشد."
+[[ -s "$SANDBOX/project/instance/tls/privkey.pem" ]] || die "کلید خصوصی گواهی بسته ساخته نشد."
+
+# The setup script must not change anything in the neighbour's project.
+# The only chmod calls it makes belong to the project's own directories.
+grep -nE "chmod .*\\\$\{?CERT|chmod .*neighbour|chmod .*cert_file" "$SANDBOX/setup_runup.sh" \
+  && die "اسکریپت مجوز فایل همسایه را تغییر می‌دهد."
+# Every chmod in the script must point at the project's own directory.
+while read -r chmod_line; do
+  case "$chmod_line" in
+    *'instance/tls'*|*'instance"'*|*'backups'*|*'.env'*) ;;
+    *) die "اسکریپت مجوز جای دیگری را تغییر می‌دهد: $chmod_line" ;;
+  esac
+done < <(grep -E "^\s*chmod " "$SANDBOX/setup_runup.sh")
+
+# And the site still serves HTTPS with that certificate.
+CLOSED_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --insecure "https://127.0.0.1:${CHOSEN_TLS_PORT}/" || echo 000)"
+[[ "$CLOSED_CODE" == "200" ]] || die "پاسخ HTTPS با گواهی بسته برابر ${CLOSED_CODE} بود."
+
+CLOSED_SERVED="$(echo | openssl s_client -connect "127.0.0.1:${CHOSEN_TLS_PORT}" -servername 203.0.113.55 2>/dev/null | openssl x509 -noout -fingerprint 2>/dev/null || true)"
+[[ -n "$CLOSED_SERVED" && "$CLOSED_SERVED" == "$EXPECTED" ]] || die "گواهی ارائه‌شده با گواهی بسته همسایه یکی نیست."
+
 log "همه بررسی‌ها موفق بود."

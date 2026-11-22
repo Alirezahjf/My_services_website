@@ -509,6 +509,82 @@ def test_setup_script_never_re_enables_the_firewall():
         assert forbidden not in script, f"the setup script must not run: {forbidden}"
 
 
+def test_setup_script_keeps_the_tls_port_when_the_certificate_is_not_ready():
+    """The port that was published must not vanish when TLS cannot start.
+
+    The port decides the public address that was written to .env. Clearing
+    it left the address without a port, which broke the check that follows.
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    # The port is never cleared to announce that TLS cannot start. The only
+    # place where it is emptied is the port search, which assigns it again
+    # right away.
+    for line in script.splitlines():
+        if 'TLS_PORT=""' in line:
+            assert line.strip() == 'TLS_PORT=""', (
+                "the TLS port must not be cleared to announce that the "
+                "certificate is missing"
+            )
+    # Whether the TLS service runs is decided on its own flag.
+    assert "TLS_ENABLED=0" in script
+    assert "TLS_ENABLED=1" in script
+    # The address that was published keeps its port in every case.
+    assert 'set_env_value SITE_URL "https://${PUBLIC_IP}:${TLS_PORT}"' in script
+
+
+def test_the_https_check_uses_a_port_that_is_always_set():
+    """The check of the secure address must not build an address without a port.
+
+    An empty port produced "212.237.217.171::127.0.0.1", which curl
+    refuses to parse.
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    assert '--resolve "${PUBLIC_IP}:${TLS_PORT}:127.0.0.1"' in script
+    # The port is filled in before the check reaches it.
+    assert script.index('TLS_PORT="$PREFERRED_TLS_PORT"') < script.index("--resolve")
+    # And the check only runs when there is a certificate to serve.
+    assert 'if [[ -n "$CERT_FOUND" ]]; then' in script
+
+
+def test_setup_script_takes_the_copy_with_enough_rights():
+    """The copy of the neighbour's certificate is not made by the service user.
+
+    The neighbour's file can sit below a directory that the service user
+    cannot enter, so the copy has to be taken with the rights of the
+    script and handed over afterwards.
+    """
+    script = (ROOT / "scripts" / "setup_runup.sh").read_text(encoding="utf-8")
+    copy_block = script.split("copy_neighbour_certificate() {")[1].split("\n}\n")[0]
+    assert "runuser -u" not in copy_block
+    assert "owner='$APP_USER'" in copy_block
+
+
+def test_status_falls_back_to_the_copy_when_the_source_is_blocked(
+        certificate_authority, tmp_path, monkeypatch):
+    """The status describes the copy the service actually serves."""
+    from app.services import tls_manager
+
+    target = tmp_path / "tls"
+    tls_manager.materialise_tls_material(certificate_authority["bundle"], target)
+    monkeypatch.setattr(tls_manager, "TLS_DIR", target)
+
+    sealed = tmp_path / "sealed"
+    sealed.mkdir()
+    blocked = sealed / "trusted.pem"
+    blocked.write_bytes(certificate_authority["bundle"].read_bytes())
+    sealed.chmod(0o000)
+    try:
+        state = tls_manager.collect_status(
+            explicit_cert_path=str(blocked),
+            site_url=f"https://{certificate_authority['ip']}:9900",
+        )
+    finally:
+        sealed.chmod(0o755)
+
+    assert state.enabled is True
+    assert str(target / "fullchain.pem") == state.source_path
+
+
 # ---------------------------------------------------------------------------
 # Public origin and the legacy HTTP upgrade
 # ---------------------------------------------------------------------------
