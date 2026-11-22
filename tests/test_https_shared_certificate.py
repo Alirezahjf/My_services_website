@@ -186,6 +186,41 @@ def test_prepare_tls_material_declines_when_the_certificate_is_missing(tmp_path,
     assert ok is False
 
 
+def test_prepare_tls_material_uses_the_copy_when_the_source_cannot_be_read(
+        certificate_authority, tmp_path, monkeypatch):
+    """A start works from the copy, even when the neighbour's file is blocked.
+
+    The neighbour's certificate can sit behind a directory the service user
+    cannot enter. The setup script takes the copy with enough rights; the
+    service then starts from that copy instead of reading the file again.
+    """
+    monkeypatch.setenv("PUBLIC_ORIGIN", f"https://{certificate_authority['ip']}:9900")
+    target = tmp_path / "tls"
+    assert tls_manager.materialise_tls_material(
+        certificate_authority["bundle"], target) is not None
+
+    blocked = tmp_path / "private" / "trusted.pem"
+    blocked.parent.mkdir()
+    blocked.write_bytes(certificate_authority["bundle"].read_bytes())
+    blocked.parent.chmod(0o000)
+    try:
+        ok = tls_manager.prepare_tls_material(
+            blocked, target, required_ip=certificate_authority["ip"])
+    finally:
+        blocked.parent.chmod(0o755)
+    assert ok is True
+    assert (target / "fullchain.pem").exists()
+    assert (target / "privkey.pem").exists()
+
+
+def test_prepare_tls_material_declines_when_neither_source_nor_copy_is_usable(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("PUBLIC_ORIGIN", "https://203.0.113.77:9900")
+    ok = tls_manager.prepare_tls_material(tmp_path / "absent.pem", tmp_path)
+    assert ok is False
+    assert not (tmp_path / "fullchain.pem").exists()
+
+
 # ---------------------------------------------------------------------------
 # Serving TLS with the shared certificate
 # ---------------------------------------------------------------------------

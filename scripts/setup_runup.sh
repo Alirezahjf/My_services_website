@@ -183,6 +183,79 @@ chmod 0640 "$APP_DIR/.env"
 # 3. Certificate discovery
 # ---------------------------------------------------------------------------
 
+# Make the neighbour's certificate readable by the service user.
+#
+# The certificate usually lives below a home directory that is only
+# readable by root, for example /root/Desktop/<neighbour>/data/tls/. The
+# service user cannot walk through such a directory, so it can neither
+# read the file nor see that it exists.
+#
+# Only the way to the file is opened, and only for as long as it is
+# needed: every directory that really blocks the service user gets the
+# execute bit for others, and the original mode is put back at the end.
+# Nothing inside the neighbour's project is written, moved or deleted, and
+# the certificate file itself only receives the read bit for others.
+#
+# The copy that Gunicorn actually serves is made *while* the way is open,
+# and the original modes are restored afterwards. Doing it in the other
+# order would close the door before the copy is taken.
+grant_certificate_access() {
+  local cert_file="$1" dir mode restored=() dir_path entry path original
+  [[ -f "$cert_file" ]] || return 1
+
+  # Open the way to the file, remembering the original modes. The walk stops
+  # at the root, which every user may enter anyway.
+  dir_path="$(dirname "$cert_file")"
+  while [[ "$dir_path" != "/" && -n "$dir_path" ]]; do
+    if ! runuser -u "$APP_USER" -- test -x "$dir_path" 2>/dev/null; then
+      mode="$(stat -c '%a' "$dir_path")"
+      chmod o+x "$dir_path"
+      restored+=("$dir_path:$mode")
+    fi
+    dir_path="$(dirname "$dir_path")"
+  done
+
+  # Open the file itself for reading.
+  if ! runuser -u "$APP_USER" -- test -r "$cert_file"; then
+    mode="$(stat -c '%a' "$cert_file")"
+    chmod o+r "$cert_file"
+    restored+=("$cert_file:$mode")
+  fi
+
+  if runuser -u "$APP_USER" -- test -r "$cert_file"; then
+    log "خواندن گواهی همسایه برای کاربر سرویس ممکن شد."
+  else
+    warn "کاربر سرویس همچنان نمی‌تواند فایل گواهی همسایه را بخواند؛ سایت روی HTTP می‌ماند."
+  fi
+
+  # Take the copy while the way is still open. The copy lands in the
+  # project's own runtime directory; the neighbour's file is only read.
+  local copied=1
+  mkdir -p "$APP_DIR/instance/tls"
+  if runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" -c "
+import sys
+sys.path.insert(0, '$APP_DIR')
+from app.services.tls_manager import materialise_tls_material
+materialise_tls_material('$cert_file', '$APP_DIR/instance/tls')
+" 2>/dev/null; then
+    copied=0
+  else
+    warn "آماده‌سازی فایل گواهی ناموفق بود؛ سایت روی HTTP بالا می‌ماند."
+    rm -f "$APP_DIR/instance/tls/fullchain.pem" "$APP_DIR/instance/tls/privkey.pem"
+  fi
+
+  # Put the original modes back now that the copy exists.
+  for entry in "${restored[@]:-}"; do
+    [[ -n "$entry" ]] || continue
+    path="${entry%:*}"
+    original="${entry##*:}"
+    [[ -e "$path" ]] || continue
+    chmod "$original" "$path" 2>/dev/null || true
+  done
+
+  [[ "$copied" == "0" ]]
+}
+
 log "پیدا کردن گواهی همسایه"
 CERT_FOUND="$("$APP_DIR/.venv/bin/python" - "$CERT_PATH" "$PUBLIC_IP" <<'PY'
 import sys
@@ -216,25 +289,21 @@ if [[ -z "$CERT_FOUND" ]]; then
 else
   log "گواهی پیدا شد: $CERT_FOUND"
   set_env_value TLS_CERT_PATH "$CERT_FOUND"
-  # The neighbour's file must stay readable by this service user. The file is
-  # never modified, only its ownership/permission is adjusted so that the
-  # service can read it.
-  if ! runuser -u "$APP_USER" -- test -r "$CERT_FOUND"; then
-    warn "کاربر سرویس نمی‌تواند فایل گواهی همسایه را بخواند؛ ادامه به معنی ماندن سایت روی HTTP است."
-  fi
-  # Split the bundle into the chain and the key that Gunicorn needs. This
-  # happens here so that the files exist even before the service starts.
-  mkdir -p "$APP_DIR/instance/tls"
-  if runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" -c "
-import sys
-sys.path.insert(0, '$APP_DIR')
-from app.services.tls_manager import materialise_tls_material
-materialise_tls_material('$CERT_FOUND', '$APP_DIR/instance/tls')
-" 2>/dev/null; then
+  # The neighbour's file must be readable by the service user. The neighbour's
+  # data is never changed: only the permission to traverse the directories
+  # on the way to the file and to read the file itself are opened. The
+  # directories are only touched when they really block the service user,
+  # and the original mode is restored afterwards.
+  #
+  # The copy that Gunicorn serves is taken while the way is open and lives
+  # in the project's own runtime directory.
+  if grant_certificate_access "$CERT_FOUND"; then
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR/instance/tls" 2>/dev/null || true
+    # The chain is world readable, the private key stays with the service
+    # user only.
+    chmod 0644 "$APP_DIR/instance/tls/fullchain.pem" 2>/dev/null || true
+    chmod 0600 "$APP_DIR/instance/tls/privkey.pem" 2>/dev/null || true
     log "فایل‌های گواهی برای Gunicorn آماده شد."
-  else
-    warn "آماده‌سازی فایل گواهی ناموفق بود؛ سایت روی HTTP بالا می‌ماند."
-    rm -f "$APP_DIR/instance/tls/fullchain.pem" "$APP_DIR/instance/tls/privkey.pem"
   fi
 fi
 
@@ -353,12 +422,18 @@ After=network.target
 
 [Service]
 Type=oneshot
-User=${APP_USER}
-Group=${APP_USER}
+# The timer runs as root because the neighbouring certificate often lives
+# below a directory that only root may enter. It only reads that file; the
+# copy it writes goes into the project's own runtime directory and is handed
+# to the service user. Nothing inside the neighbour's project is changed.
+User=root
+Group=root
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${APP_DIR}/.env
 Environment=PATH=${APP_DIR}/.venv/bin
-ExecStart=${APP_DIR}/.venv/bin/python -c "import sys; sys.path.insert(0, '${APP_DIR}'); from app.services.tls_manager import refresh_tls_material; sys.exit(0 if refresh_tls_material() else 1)"
+ExecStartPre=/bin/sh -c 'mkdir -p ${APP_DIR}/instance/tls && chown ${APP_USER}:${APP_USER} ${APP_DIR}/instance/tls'
+ExecStart=${APP_DIR}/.venv/bin/python -c "import sys; sys.path.insert(0, '${APP_DIR}'); from app.services.tls_manager import refresh_tls_material; ok = refresh_tls_material(owner='${APP_USER}'); sys.exit(0 if ok else 1)"
+ExecStartPost=/bin/sh -c 'chown ${APP_USER}:${APP_USER} ${APP_DIR}/instance/tls/* 2>/dev/null || true'
 
 [Install]
 WantedBy=multi-user.target

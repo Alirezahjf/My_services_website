@@ -21,6 +21,7 @@ import os
 import re
 import socket
 import ssl
+import stat
 import subprocess
 import threading
 import time
@@ -117,7 +118,20 @@ def read_certificate(path: str | os.PathLike[str]) -> CertificateInfo:
     only the certificate block is parsed here.
     """
     cert_path = Path(path)
-    if not cert_path.exists():
+    try:
+        stat_result = cert_path.stat()
+    except PermissionError:
+        # The path itself is not reachable: a parent directory denies the
+        # traversal. Saying only "the file was not found" would send the
+        # reader looking for a missing file instead of a permission
+        # problem, so the real cause is named.
+        raise CertificateError(
+            f"فایل گواهی در مسیر {cert_path} قابل دسترسی نیست؛ کاربر فعلی اجازه ورود به "
+            f"پوشه‌های این مسیر را ندارد. دسترسی خواندن را برای کاربر سرویس باز کنید."
+        ) from None
+    except OSError:
+        stat_result = None
+    if stat_result is None or not stat.S_ISREG(stat_result.st_mode):
         raise CertificateError(f"فایل گواهی پیدا نشد: {cert_path}")
     try:
         pem = cert_path.read_text(encoding="utf-8", errors="replace")
@@ -370,6 +384,16 @@ def find_certificate(explicit_path: str | os.PathLike[str] | None = None) -> tup
             return None, notes
         if _is_file(path):
             return path, notes
+        if _is_blocked(path):
+            notes.append(
+                f"مسیر دستی وجود دارد ولی کاربر سرویس اجازه ورود به پوشه‌های آن را ندارد: {path}"
+            )
+            return None, notes
+        if _is_unreachable(path):
+            notes.append(
+                f"پوشه‌های مسیر دستی برای کاربر سرویس بسته‌اند: {path}"
+            )
+            return None, notes
         notes.append("مسیر دستی وجود نداشت.")
         return None, notes
 
@@ -389,6 +413,64 @@ def _is_file(path: Path) -> bool:
         return path.is_file()
     except OSError:
         return False
+
+
+def _is_blocked(path: Path) -> bool:
+    """Is ``path`` there but out of reach for the current user?
+
+    The file itself answers this: asking for its status raises a
+    permission error when a directory on the way denies the traversal.
+    """
+    try:
+        path.stat()
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _is_unreachable(path: Path) -> bool:
+    """Is ``path`` hidden behind a directory the current user cannot enter?
+
+    A file that simply is not there and a file that cannot be reached because
+    a parent directory denies traversal look the same to ``Path.exists``. This
+    helper tells them apart so the message can name the real cause.
+
+    The answer is about the user who runs the code. When that user is not
+    the owner of the directory — the service user on the server — only the
+    "other" bits decide, so they are what is looked at.
+    """
+    current = path.parent
+    seen = 0
+    while current != current.parent and seen < 40:
+        seen += 1
+        try:
+            info = current.stat()
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode):
+            return False
+        if info.st_uid == os.getuid():
+            # The owner of the directory: the owner bits decide.
+            if not (info.st_mode & stat.S_IXUSR):
+                return True
+        elif info.st_gid in _current_groups():
+            if not (info.st_mode & stat.S_IXGRP):
+                return True
+        elif not (info.st_mode & stat.S_IXOTH):
+            return True
+        current = current.parent
+    return False
+
+
+def _current_groups() -> set[int]:
+    try:
+        return set(os.getgroups())
+    except OSError:
+        return set()
 
 
 def _bundle_in_dir(directory: Path) -> Path | None:
@@ -695,16 +777,51 @@ def prepare_tls_material(
     Returns True when a usable certificate was written. When no certificate is
     available the site keeps running over plain HTTP, which is the documented
     fallback.
+
+    The copy that was taken earlier is accepted as it is. That matters when
+    the neighbour's file sits behind a directory the service user cannot
+    enter: the setup script takes the copy with enough rights and hands it
+    over, and the service then starts from that copy instead of reading the
+    neighbour's file again.
     """
     from dotenv import load_dotenv
 
     load_dotenv()
+    target_dir = Path(tls_dir) if tls_dir else TLS_DIR
     explicit = bundle_path or os.getenv("TLS_CERT_PATH") or None
     path, _notes = find_certificate(explicit)
     if path is None:
-        return False
+        return _existing_material_is_usable(target_dir, required_ip)
     try:
         info = read_certificate(path)
+    except CertificateError:
+        return _existing_material_is_usable(target_dir, required_ip)
+    if info.is_expired:
+        return False
+    wanted = required_ip or os.getenv("PUBLIC_ORIGIN") or ""
+    host = _host_from_url(wanted) if "://" in wanted else (wanted or None)
+    if host and not certificate_covers_ip(info, host):
+        return False
+    try:
+        materialise_tls_material(path, target_dir)
+    except (CertificateError, OSError, TypeError, AttributeError):
+        return _existing_material_is_usable(target_dir, required_ip)
+    return True
+
+
+def _existing_material_is_usable(target_dir: Path, required_ip: str | None) -> bool:
+    """Is the copy that is already in place usable?
+
+    The copy is checked on its own, so a start works even when the
+    neighbour's file cannot be read any more. The certificate in the copy is
+    what Gunicorn serves, so it is the one that has to be right.
+    """
+    chain_path = target_dir / "fullchain.pem"
+    key_path = target_dir / "privkey.pem"
+    if not chain_path.is_file() or not key_path.is_file():
+        return False
+    try:
+        info = read_certificate(chain_path)
     except CertificateError:
         return False
     if info.is_expired:
@@ -713,17 +830,36 @@ def prepare_tls_material(
     host = _host_from_url(wanted) if "://" in wanted else (wanted or None)
     if host and not certificate_covers_ip(info, host):
         return False
-    try:
-        materialise_tls_material(path, Path(tls_dir) if tls_dir else None)
-    except (CertificateError, OSError, TypeError, AttributeError):
-        return False
     return True
+
+
+def _apply_owner(owner: str | None, *paths: Path) -> None:
+    """Hand the material over to the service user.
+
+    The refresh may run with more rights than the service has, so the files
+    would end up unreadable for Gunicorn. The owner is set before the
+    service is asked to reload, never after.
+    """
+    if not owner:
+        return
+    import pwd
+
+    try:
+        entry = pwd.getpwnam(owner)
+    except KeyError:
+        return
+    for path in paths:
+        try:
+            os.chown(path, entry.pw_uid, entry.pw_gid)
+        except OSError:
+            continue
 
 
 def refresh_tls_material(
     bundle_path: str | os.PathLike[str] | None = None,
     tls_dir: str | os.PathLike[str] | None = None,
     required_ip: str | None = None,
+    owner: str | None = None,
 ) -> bool:
     """Re-read the certificate and reload Gunicorn when it changed."""
     from dotenv import load_dotenv
@@ -771,6 +907,7 @@ def refresh_tls_material(
             tmp.write_bytes(payload)
             os.chmod(tmp, mode)
             os.replace(tmp, target)
+        _apply_owner(owner, chain_path, key_path)
     except OSError:
         return False
 

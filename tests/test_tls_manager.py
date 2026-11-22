@@ -419,3 +419,46 @@ def test_reloader_reports_missing_certificate(tmp_path):
     reloaded, message = reloader.refresh()
     assert reloaded is False
     assert "پیدا نشد" in message
+
+
+def test_read_certificate_names_the_permission_problem(tmp_path, monkeypatch):
+    """A file behind a directory the service user cannot enter is not called missing."""
+    private = tmp_path / "private"
+    private.mkdir()
+    bundle = private / "trusted.pem"
+    bundle.write_text("-----BEGIN CERTIFICATE-----\n")
+    private.chmod(0o700)
+
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if self == bundle:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    with pytest.raises(tls_manager.CertificateError) as excinfo:
+        tls_manager.read_certificate(bundle)
+    message = str(excinfo.value)
+    assert "قابل دسترسی نیست" in message
+    assert "پیدا نشد" not in message
+
+
+def test_find_certificate_explains_a_blocked_path(tmp_path, monkeypatch):
+    """The discovery names the permission problem rather than a missing file."""
+    private = tmp_path / "private"
+    private.mkdir()
+    bundle = private / "trusted.pem"
+    bundle.write_text("-----BEGIN CERTIFICATE-----\n")
+
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if self == bundle:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    path, notes = tls_manager.find_certificate(str(bundle))
+    assert path is None
+    assert any("اجازه ورود" in note for note in notes)
