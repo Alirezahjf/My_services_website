@@ -319,6 +319,27 @@ for unit in "$TLS_SERVICE" "$WEB_SERVICE" "$MCP_SERVICE"; do
   systemctl stop "$unit" >/dev/null 2>&1 || true
 done
 
+# From this point on the site is down until the services are started
+# again. If anything goes wrong on the way, the site must not be left
+# that way: the trap below starts the services again before the script
+# leaves, so the worst that happens is a short interruption and a message
+# saying what went wrong.
+SERVICES_STOPPED=1
+restore_services() {
+  local status=$?
+  [[ "${SERVICES_STOPPED:-0}" == "1" ]] || exit "$status"
+  SERVICES_STOPPED=0
+  warn "سرویس‌های این پروژه دوباره بالا آورده می‌شوند تا سایت پایین نماند."
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if [[ "${TLS_ENABLED:-0}" == "1" ]]; then
+    systemctl start "$WEB_SERVICE" "$TLS_SERVICE" "$MCP_SERVICE" >/dev/null 2>&1 || true
+  else
+    systemctl start "$WEB_SERVICE" "$MCP_SERVICE" >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap restore_services ERR
+
 # The directory of the material has to exist even when there is no
 # certificate: Gunicorn writes its process number into it.
 prepare_tls_directory
@@ -488,6 +509,8 @@ fi
 
 sleep 4
 systemctl is-active --quiet "$WEB_SERVICE" || { journalctl -u "$WEB_SERVICE" -n 40 --no-pager >&2 || true; die "سرویس سایت بالا نیامد."; }
+SERVICES_STOPPED=0
+trap - ERR
 if [[ "$TLS_ENABLED" == "1" ]]; then
   systemctl is-active --quiet "$TLS_SERVICE" || { journalctl -u "$TLS_SERVICE" -n 40 --no-pager >&2 || true; die "سرویس HTTPS بالا نیامد."; }
 fi
