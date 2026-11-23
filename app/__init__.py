@@ -12,7 +12,7 @@ from flask_wtf.csrf import CSRFError
 def create_app(test_config=None):
     from dotenv import load_dotenv
     load_dotenv()
-    app = Flask(__name__, instance_relative_config=True)
+    app = Flask(__name__, instance_relative_config=True, static_folder=None)
     from config import Config
     app.config.from_object(Config)
     if test_config:
@@ -24,6 +24,10 @@ def create_app(test_config=None):
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
     Path(app.instance_path).mkdir(parents=True, exist_ok=True)
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
+
+    from .services.compression import compress_responses, compress_static
+    compress_static(app)
+    compress_responses(app)
 
     from .extensions import db, migrate, login_manager, csrf, limiter
     db.init_app(app)

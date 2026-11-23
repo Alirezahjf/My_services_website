@@ -18,3 +18,9 @@ backups/
 node_modules/
 dist/
 build/
+
+# The files of the appearance are built from their source by
+# tools/build_assets.py. They are not kept in the repository, so the
+# source and the built file can never drift apart unnoticed.
+app/static/css/main.css
+app/static/js/main.js

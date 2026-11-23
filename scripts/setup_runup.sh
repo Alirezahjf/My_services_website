@@ -101,6 +101,18 @@ runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
 runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
 
 # ---------------------------------------------------------------------------
+# 1b. Stylesheet and script
+# ---------------------------------------------------------------------------
+
+# The sheet of the site is written by hand and read by hand. The file
+# that is served is shortened, so that the browser has less to read
+# before the page can be drawn. The source stays in the repository; the
+# shortened file is written next to it and is not kept in the
+# repository, so the two can never drift apart unnoticed.
+log "آماده‌سازی فایل‌های ظاهری"
+runuser -u "$APP_USER" -- "$APP_DIR/.venv/bin/python" "$APP_DIR/tools/build_assets.py"
+
+# ---------------------------------------------------------------------------
 # 2. Environment file
 # ---------------------------------------------------------------------------
 
