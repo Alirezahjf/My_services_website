@@ -136,6 +136,49 @@ curl -sSI --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/static/css/main.cs
 echo "  the script:"
 curl -sSI --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/static/js/main.js" 2>&1 | sed 's/^/    /' | head -18
 
+# A phone asks for brotli. The answer must carry the bytes of the name
+# it announces. When the server announces brotli but carries gzip, the
+# browser cannot read the sheet and the phone shows an empty page.
+echo "  the answer a phone gets (it asks for brotli):"
+tmp_body="$(mktemp)"
+enc="$(curl -sS -o "$tmp_body" -D- --max-time 15 \
+  -H "Accept-Encoding: gzip, deflate, br" \
+  "http://127.0.0.1:${LEGACY_HTTP_PORT}/static/css/main.css" 2>/dev/null \
+  | grep -i '^content-encoding:' | tr -d '\r' | awk '{print $2}')"
+echo "    announced: ${enc:-none}"
+if [[ -s "$tmp_body" ]]; then
+  magic="$(od -An -tx1 -N2 "$tmp_body" | tr -d ' \n')"
+  echo "    first bytes: ${magic}"
+  case "$enc" in
+    br)
+      if [[ "$magic" == "1f8b" ]]; then
+        echo "    -> WRONG. The answer says brotli but carries gzip."
+        echo "       A phone cannot read the sheet and shows an empty page."
+      else
+        echo "    -> the bytes match the name."
+      fi
+      ;;
+    gzip)
+      if [[ "$magic" == "1f8b" ]]; then
+        echo "    -> the bytes match the name."
+      else
+        echo "    -> WRONG. The answer says gzip but carries something else."
+      fi
+      ;;
+    *)
+      echo "    -> no shortening was used."
+      ;;
+  esac
+fi
+rm -f "$tmp_body"
+echo "  can the server shorten with brotli?"
+if "$APP_DIR/.venv/bin/python" -c "import brotli" 2>/dev/null; then
+  echo "    yes, the package is there."
+else
+  echo "    NO, the package is missing. The site then answers with gzip,"
+  echo "    which is right, as long as it says so."
+fi
+
 # ---------------------------------------------------------------------------
 hr "7. what the page itself carries"
 html="$(curl -sS --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/" 2>&1 || true)"
