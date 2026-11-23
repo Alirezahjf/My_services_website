@@ -2161,6 +2161,77 @@ h3 {
 }
 
 /* ==========================================================================
+   The net under the entrance.
+
+   The entrance hides a part of the page for a moment and then lets it
+   appear again. That moment is driven by the script, so the sheet does
+   not depend on it alone: if the script is slow, blocked or stopped
+   with an error, the page must still show its text.
+
+   The way out of that is the same for every hidden part: a movement
+   that ends in the visible state, given a deadline of its own. The
+   script may bring a part in sooner, but the sheet always brings it
+   in by itself. The movement is the same one the script asks for, so
+   the two do not fight each other; the sheet only makes sure that
+   there is always a way back.
+   ========================================================================== */
+
+@keyframes reveal-in {
+
+    from {
+        opacity: 0;
+        transform: translateY(16px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* The parts that wait for the reader to reach them. The deadline is
+   long enough for the script to do its work and short enough that
+   nothing is ever kept from the reader. */
+
+.has-reveal .reveal {
+    animation: reveal-in .55s ease 2.6s forwards;
+}
+
+.has-reveal .reveal.is-visible {
+    animation: none;
+}
+
+/* The words that rise from behind their mask. The mask is lifted by
+   the script; the sheet lifts it too, with the same movement and the
+   same deadline, so a heading is never left behind its mask. */
+
+.reveal-line > span {
+    animation: reveal-line-in .85s var(--ease-out, cubic-bezier(.22, .75, .25, 1)) 2.6s forwards;
+}
+
+.reveal-line.is-in > span {
+    animation: none;
+}
+
+@keyframes reveal-line-in {
+
+    from {
+        transform: translateY(105%);
+    }
+
+    to {
+        transform: translateY(0);
+    }
+}
+
+/* The parts that come in with the page itself. They are shown the
+   same way, with a deadline of their own. */
+
+.page-is-ready [data-page-enter]>* {
+    animation: page-enter .7s var(--ease-out, cubic-bezier(.22, .75, .25, 1)) forwards;
+}
+
+/* ==========================================================================
    Filling the grid.
 
    The wide card takes four of the six columns and two rows. The cards

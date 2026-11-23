@@ -39,33 +39,69 @@ bash: scripts/setup_runup.sh: No such file or directory
 این بلوک را **یک‌جا** کپی و اجرا کنید:
 
 ```bash
-cd /opt/hjf-services
-
-# 1) همه تغییرات محلی را کنار بگذار و درخت کاری را دقیقاً روی نسخه دور بردار.
-#    این کار فایل setup_runup.sh را روی دیسک می‌آورد و شاخه محلی را هم
-#    با شاخه دور یکی می‌کند.
-git fetch origin
-git checkout -B arena/5096b461-my-services-website origin/arena/5096b461-my-services-website
-git reset --hard origin/arena/5096b461-my-services-website
-git clean -fd -- scripts app config.py tools tests docs
-
-# 2) حالا اسکریپت آپدیت روی دیسک هست؛ خودش هم کد را دوباره می‌گیرد،
-#    وابستگی‌ها را نصب می‌کند، گواهی همسایه را پیدا می‌کند و سرویس‌ها
-#    را بالا می‌آورد.
-sudo bash scripts/setup_runup.sh
+cd /opt/hjf-services && sudo bash -c '
+git fetch origin refs/heads/arena/6e2e1efe-my-services-website:refs/remotes/origin/arena/6e2e1efe-my-services-website &&
+git checkout -B arena/6e2e1efe-my-services-website origin/arena/6e2e1efe-my-services-website &&
+git reset --hard origin/arena/6e2e1efe-my-services-website &&
+bash scripts/setup_runup.sh'
 ```
 
-### اگر `git clean` خطا داد
+### چرا شاخه با نام کامل نوشته می‌شود
 
-`git clean` فقط فایل‌های **بدون‌ردیابی** را پاک می‌کند و به `.env`، پایگاه داده و `uploads` دست نمی‌زند (این‌ها در `.gitignore` هستند). اگر باز هم خطا داد، این خط را حذف کنید و بقیه را اجرا کنید:
+`git fetch origin <نام-شاخه>` فقط یک یادداشت در `FETCH_HEAD` می‌گذارد و شاخهٔ
+`origin/<نام>` را **نمی‌سازد**، مگر آنکه `remote.origin.fetch` در مخزن سرور
+همان شاخه را پوشش دهد. روی سرور آن تنظیم نبود، و به همین دلیل خطای زیر
+می‌آمد:
+
+```
+fatal: 'origin/arena/6e2e1efe-my-services-website' is not a commit ...
+```
+
+نوشتن شاخه با نام کامل (`refs/heads/...:refs/remotes/origin/...`) شاخهٔ
+دورراه را می‌سازد و دستور بعدی کار می‌کند. خودِ `scripts/setup_runup.sh` هم
+از همین شکل استفاده می‌کند، پس از این پس یک‌بار درست شدن کافی است.
+
+### اگر باز هم نخواست
 
 ```bash
-cd /opt/hjf-services
-git fetch origin
-git checkout -B arena/5096b461-my-services-website origin/arena/5096b461-my-services-website
-git reset --hard origin/arena/5096b461-my-services-website
-sudo bash scripts/setup_runup.sh
+cd /opt/hjf-services && sudo bash -c '
+git fetch origin arena/6e2e1efe-my-services-website &&
+git checkout -B arena/6e2e1efe-my-services-website FETCH_HEAD &&
+git reset --hard FETCH_HEAD &&
+bash scripts/setup_runup.sh'
 ```
+
+`FETCH_HEAD` از همان fetch ساخته می‌شود و همیشه در دسترس است.
+
+### اگر می‌خواهید این مشکل برای همیشه تمام شود
+
+```bash
+cd /opt/hjf-services && git config --add remote.origin.fetch \
+  '+refs/heads/arena/6e2e1efe-my-services-website:refs/remotes/origin/arena/6e2e1efe-my-services-website'
+```
+
+---
+
+## وقتی صفحه سیاه دیده می‌شود
+
+اگر سایت بالا آمد ولی چیزی دیده نمی‌شود، این اسکریپت را اجرا کنید. فقط
+می‌خواند و هیچ چیز را تغییر نمی‌دهد:
+
+```bash
+cd /opt/hjf-services && sudo bash tools/diagnose_site.sh
+```
+
+گزارش آن نشان می‌دهد کدام commit روی دیسک است، فایل‌های ساخته‌شده چه
+اندازه‌اند، سرویس‌ها چه جوابی می‌دهند و مرورگر چه سربرگ‌هایی می‌گیرد.
+
+دو چیز در آن گزارش ارزش نگاه کردن دارد:
+
+- **شمارهٔ روی نشانی فایل‌های ظاهر.** نشانی شیوه‌نامه و اسکریپت باید یک
+  شمارهٔ یکسان داشته باشند: `/static/css/main.css?v=...` و
+  `/static/js/main.js?v=...`. اگر شماره نداشته باشند، مرورگر فایل کهنه را یک
+  سال نگه می‌دارد و صفحه با قاعده‌های یک نسخهٔ دیگر باز می‌شود.
+- **اندازهٔ `main.css` و `main.js`.** اگر صفر باشند یا خیلی کوچک، ساخت
+  فایل‌های ظاهر نیمه‌کاره مانده است.
 
 ---
 

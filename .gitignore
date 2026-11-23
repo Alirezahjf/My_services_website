@@ -24,3 +24,4 @@ build/
 # source and the built file can never drift apart unnoticed.
 app/static/css/main.css
 app/static/js/main.js
+app/static/css/.asset-version

@@ -86,8 +86,14 @@ cd "$APP_DIR"
 
 log "دریافت آخرین کد از شاخه ${BRANCH}"
 if [[ -d "$APP_DIR/.git" ]]; then
-  runuser -u "$APP_USER" -- git -C "$APP_DIR" fetch origin "$BRANCH"
-  runuser -u "$APP_USER" -- git -C "$APP_DIR" checkout "$BRANCH"
+  # The ref is named in full, so that the branch that is tracked on the
+  # server is written down and can be read from there. A short fetch only
+  # leaves a note in FETCH_HEAD and does not make the branch that the
+  # next line needs; then the update stops half way and the site keeps
+  # the old files.
+  runuser -u "$APP_USER" -- git -C "$APP_DIR" fetch origin \
+    "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+  runuser -u "$APP_USER" -- git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
   runuser -u "$APP_USER" -- git -C "$APP_DIR" reset --hard "origin/$BRANCH"
 else
   die "پوشه پروژه مخزن گیت نیست: $APP_DIR"

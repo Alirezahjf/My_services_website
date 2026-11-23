@@ -24,6 +24,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -36,6 +37,7 @@ CSS_SOURCE = ROOT / "app" / "static" / "css" / "site.src.css"
 CSS_TARGET = ROOT / "app" / "static" / "css" / "main.css"
 JS_SOURCE = ROOT / "app" / "static" / "js" / "site.src.js"
 JS_TARGET = ROOT / "app" / "static" / "js" / "main.js"
+VERSION_TARGET = ROOT / "app" / "static" / "css" / ".asset-version"
 
 # The colours whose name is longer than their short form.
 COLOURS = {
@@ -148,6 +150,16 @@ def main() -> int:
     if JS_SOURCE.exists():
         good &= write(JS_TARGET, minify_js(JS_SOURCE.read_text(encoding="utf-8")),
                       check)
+
+    # The number that belongs to these files. The page puts it in the
+    # address of the sheet and of the script, so that a browser that
+    # kept an old file asks for the old address and still gets a file
+    # that belongs with the script it already has.
+    version = hashlib.sha256()
+    for path in (CSS_TARGET, JS_TARGET):
+        if path.exists():
+            version.update(path.read_bytes())
+    good &= write(VERSION_TARGET, version.hexdigest()[:12] + "\n", check)
 
     if check and not good:
         print("The files of the appearance are not in step with their source.")

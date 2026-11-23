@@ -143,7 +143,14 @@ def compress_static(app):
         response.headers["Content-Length"] = str(len(body))
         response.headers["ETag"] = etag
         response.headers["Vary"] = "Accept-Encoding"
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        # A file that carries the number of the day in its address can be
+        # kept for a year: that address is never used for another file.
+        # A file that is asked for by its plain name can change under
+        # the same address, so it must not be kept for long.
+        if request.args.get("v"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
         return response
 
     # The rule keeps the name that the templates use to build the

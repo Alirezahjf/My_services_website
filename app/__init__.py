@@ -29,6 +29,25 @@ def create_app(test_config=None):
     compress_static(app)
     compress_responses(app)
 
+    from .services.asset_version import asset_version
+
+    @app.template_global("asset")
+    def asset(filename: str) -> str:
+        """The address of a file of the appearance, with the number of today.
+
+        The number is taken from the content of the built files, so it
+        changes when they change. A browser that keeps an old file for a
+        year therefore asks for the old address and still gets a file
+        that belongs with the script it already has.
+        """
+        from flask import url_for
+        url = url_for("static", filename=filename)
+        version = asset_version(app)
+        if not version:
+            return url
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}v={version}"
+
     from .extensions import db, migrate, login_manager, csrf, limiter
     db.init_app(app)
     migrate.init_app(app, db)
