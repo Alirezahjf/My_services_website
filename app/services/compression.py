@@ -78,9 +78,30 @@ def _brotli(raw: bytes) -> bytes:
     return brotli.compress(raw, quality=9)
 
 
+def _brotli_is_there() -> bool:
+    """True when the server can really shorten with brotli.
+
+    The name that is sent back must match the bytes that are sent with
+    it. When brotli is not installed, the bytes are shortened with gzip
+    instead; saying "br" while sending gzip makes the browser give up
+    on the page, and it shows nothing at all.
+    """
+    try:
+        import brotli  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _encoding_for(accept: str) -> str | None:
-    """Pick the way of shortening that the browser knows."""
-    if "br" in accept:
+    """Pick the way of shortening that the browser knows.
+
+    The choice is only made between the ways the server can really
+    produce. A name that the server cannot honour is never sent, because
+    a browser that cannot read the answer shows an empty page and says
+    nothing about it.
+    """
+    if "br" in accept and _brotli_is_there():
         return "br"
     if "gzip" in accept:
         return "gzip"

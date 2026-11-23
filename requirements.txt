@@ -12,6 +12,10 @@ python-dotenv>=1.0,<2
 requests>=2.32,<3
 Pillow>=10.4,<12
 bleach>=6.1,<7
+# The site is shortened with brotli when the browser asks for it. The
+# package is named here so that the server can always produce what it
+# says it produces.
+brotli>=1.1,<2
 psycopg[binary]>=3.2,<4
 gunicorn>=23,<24
 mcp>=1.30,<2
