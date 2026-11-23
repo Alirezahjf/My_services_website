@@ -115,6 +115,20 @@ else
   echo "    -> the running service hands out the OLD files: it must be restarted."
 fi
 
+# What a phone sees when it opens the secure address. This is the test
+# that matters: a browser that cannot build the path to a trusted root
+# shows an empty page and says nothing about it.
+echo "  the secure address as a browser meets it:"
+if [[ -n "$PUBLIC_IP" ]]; then
+  curl -sS -o /dev/null --max-time 15 --resolve "${PUBLIC_IP}:${TLS_PORT}:127.0.0.1" \
+    "https://${PUBLIC_IP}:${TLS_PORT}/" 2>&1 | sed 's/^/    /'
+  curl -sS -o /dev/null -w '    the certificate is trusted, the page answered %{http_code}\n' \
+    --max-time 15 --resolve "${PUBLIC_IP}:${TLS_PORT}:127.0.0.1" \
+    "https://${PUBLIC_IP}:${TLS_PORT}/" 2>&1 | sed 's/^/    /'
+else
+  echo "    (PUBLIC_IP is not known)"
+fi
+
 # ---------------------------------------------------------------------------
 hr "6. the stylesheet and the script as the browser gets them"
 echo "  the sheet:"
@@ -140,9 +154,40 @@ for f in "$APP_DIR/instance/tls/fullchain.pem" "$APP_DIR/instance/tls/privkey.pe
     printf '  %-46s MISSING\n' "$f"
   fi
 done
-if [[ -f "$APP_DIR/instance/tls/fullchain.pem" ]]; then
-  echo "  what the certificate says:"
-  openssl x509 -in "$APP_DIR/instance/tls/fullchain.pem" -noout -subject -issuer -dates -ext subjectAltName 2>&1 | sed 's/^/    /'
+
+chain_file="$APP_DIR/instance/tls/fullchain.pem"
+if [[ -f "$chain_file" ]]; then
+  echo "  the leaf certificate:"
+  openssl x509 -in "$chain_file" -noout -subject -issuer -dates 2>&1 | sed 's/^/    /'
+  openssl x509 -in "$chain_file" -noout -ext subjectAltName 2>&1 | sed 's/^/    /'
+
+  # How many certificates the chain holds. A phone that has never been
+  # to this site has no intermediate in its store, so a chain with only
+  # the leaf cannot be completed and the page stays empty.
+  count="$(grep -c 'BEGIN CERTIFICATE' "$chain_file" 2>/dev/null || echo 0)"
+  echo "  the chain holds $count certificate(s)"
+  if [[ "$count" -lt 2 ]]; then
+    echo "    -> only the leaf is served. A phone that has not seen this"
+    echo "       site before may not be able to build the path and will"
+    echo "       show an empty page."
+  fi
+
+  # The path as the server itself sees it.
+  echo "  the path the server can build:"
+  openssl verify -untrusted "$chain_file" "$chain_file" 2>&1 | sed 's/^/    /' || true
+
+  # The path as a browser that trusts the system roots sees it.
+  echo "  the path a phone would check:"
+  openssl s_client -connect "${PUBLIC_IP:-127.0.0.1}:${TLS_PORT}" \
+    -servername "${PUBLIC_IP:-127.0.0.1}" -showcerts </dev/null 2>&1 \
+    | grep -E "^ *(depth|verify|Verification|subject|issuer)=" | sed 's/^/    /' | head -30 || true
+fi
+
+# The source of the certificate: the neighbour's file.
+if [[ -n "${TLS_CERT_PATH:-}" && -f "${TLS_CERT_PATH}" ]]; then
+  echo "  the neighbour's file that was read (${TLS_CERT_PATH}):"
+  echo "    certificates: $(grep -c 'BEGIN CERTIFICATE' "${TLS_CERT_PATH}" 2>/dev/null || echo 0)"
+  openssl x509 -in "${TLS_CERT_PATH}" -noout -subject -issuer -dates 2>&1 | sed 's/^/    /'
 fi
 
 # ---------------------------------------------------------------------------
