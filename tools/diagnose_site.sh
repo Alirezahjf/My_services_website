@@ -76,6 +76,13 @@ for port in "$LEGACY_HTTP_PORT" "$TLS_PORT"; do
   echo "  port $port:"
   ss -lntp 2>/dev/null | grep -E ":${port}\b" | sed 's/^/    /' || echo "    nothing"
 done
+echo "  the processes of this project:"
+ps -eo pid,user,etime,args 2>/dev/null | grep -E "gunicorn.*${APP_DIR}" | grep -v grep | sed 's/^/    /' || echo "    none"
+echo "  when were the files of the appearance built:"
+for f in app/static/css/main.css app/static/js/main.js; do
+  [[ -f "$APP_DIR/$f" ]] && echo "    $f : $(date -r "$APP_DIR/$f" '+%Y-%m-%d %H:%M:%S')"
+done
+echo "  the processes of the neighbour are not touched and are not shown here."
 
 # ---------------------------------------------------------------------------
 hr "5. the answers of the running services"
@@ -89,6 +96,23 @@ if [[ -n "$PUBLIC_IP" ]]; then
     "https://${PUBLIC_IP}:${TLS_PORT}/" 2>&1 | tr -d '\n' | sed 's/^/ /'; echo
 else
   echo "  (PUBLIC_IP is not known; the secure answer is not asked)"
+fi
+
+# The decisive question: does the running service hand out the files of
+# the current update, or the ones of an earlier one? The number on the
+# address of the sheet tells which.
+echo "  the number on the address of the files of the appearance:"
+live_html="$(curl -sS --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/" 2>/dev/null || true)"
+if [[ -z "$live_html" ]]; then
+  live_html="$(curl -sS --max-time 15 --resolve "${PUBLIC_IP}:${TLS_PORT}:127.0.0.1" \
+    "https://${PUBLIC_IP}:${TLS_PORT}/" 2>/dev/null || true)"
+fi
+echo "$live_html" | grep -o 'href="[^"]*main\.css[^"]*"' | sed 's/^/    /' | head -2
+echo "$live_html" | grep -o 'src="[^"]*main\.js[^"]*"' | sed 's/^/    /' | head -2
+if echo "$live_html" | grep -q 'main\.css?v='; then
+  echo "    -> the running service hands out the numbered files: it is up to date."
+else
+  echo "    -> the running service hands out the OLD files: it must be restarted."
 fi
 
 # ---------------------------------------------------------------------------
