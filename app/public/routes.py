@@ -6,7 +6,7 @@ from sqlalchemy import or_
 from werkzeug.exceptions import HTTPException
 from sqlalchemy.orm import joinedload, selectinload
 from app.extensions import db, limiter
-from app.models import Category, ContactMessage, CustomPage, FAQ, Lead, PageContent, PageRedirect, Portfolio, Product, ProductPortfolio, Service, SiteSetting, SocialLink, WorkflowStep
+from app.models import Category, ContactMessage, CustomPage, FAQ, Lead, PageContent, PageRedirect, Portfolio, PortfolioLiveLink, Product, ProductPortfolio, Service, SiteSetting, SocialLink, WorkflowStep
 from app.services.media_service import MediaValidationError, save_upload
 from app.services.utils import client_ip_hash
 from .forms import ConsultationForm, ContactForm, CustomSolutionForm
@@ -91,11 +91,22 @@ def product_detail(slug):
         related_query = related_query.filter(or_(Product.category_id.in_(category_ids), Product.additional_categories.any(Category.id.in_(category_ids))))
     related = related_query.limit(3).all()
     portfolios = [link.portfolio for link in product.portfolio_links if link.portfolio and link.portfolio.is_published and link.portfolio.show_on_product]
+    # The samples that belong to this product, so that they can be tried
+    # from the page of the product itself.
+    sample_links = (
+        db.session.query(PortfolioLiveLink)
+        .options(joinedload(PortfolioLiveLink.portfolio))
+        .filter(PortfolioLiveLink.product_id == product.id,
+                PortfolioLiveLink.is_published.is_(True),
+                PortfolioLiveLink.portfolio.has(is_published=True))
+        .order_by(PortfolioLiveLink.position, PortfolioLiveLink.id)
+        .all()
+    )
     form = ConsultationForm()
     form.product_id.choices = [(0, "انتخاب محصول")] + [(p.id, p.name) for p in products_for_forms()]
     form.product_id.data = product.id
     return render_template("public/product_detail.html", product=product, related=related,
-                           portfolios=portfolios, form=form)
+                           portfolios=portfolios, form=form, sample_links=sample_links)
 
 
 @bp.get("/portfolio")

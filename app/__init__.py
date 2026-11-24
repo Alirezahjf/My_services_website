@@ -31,6 +31,22 @@ def create_app(test_config=None):
 
     from .services.asset_version import asset_version
 
+    @app.template_global("visitor_account")
+    def visitor_account():
+        """The visitor of this request, when there is one.
+
+        The templates use it to show the account of the visitor in the
+        head of the page. It never raises: a visitor who is not signed
+        in simply has no account.
+        """
+        from .services.visitor_auth import current_visitor
+        try:
+            return current_visitor()
+        except Exception:
+            # Outside a request, or before the tables are ready, the
+            # page is simply shown without an account.
+            return None
+
     @app.template_global("asset")
     def asset(filename: str) -> str:
         """The address of a file of the appearance, with the number of today.
@@ -53,6 +69,27 @@ def create_app(test_config=None):
     migrate.init_app(app, db)
     login_manager.init_app(app)
     csrf.init_app(app)
+
+    # The limiter is one object for the whole process, because the
+    # routes are bound to it. Two things about it belong to the
+    # application that is serving the request, and not to the process:
+    #
+    # * the flag that says whether the limiter is on at all. It is read
+    #   when the request is served, and so it is set again before each
+    #   request, from the configuration of the application that serves
+    #   it. This hook is registered before the limiter is given the
+    #   application, so that it runs before the limiter's own hook.
+    # * the counter. It must begin empty for every new application;
+    #   otherwise the counter of an earlier application would turn away
+    #   the requests of a later one. The place of the counter is taken
+    #   from the configuration when it is given, and so the counter of
+    #   one application does not trouble the next.
+    @app.before_request
+    def _limiter_follows_the_application():
+        limiter.enabled = bool(app.config.get("RATELIMIT_ENABLED", limiter.enabled))
+
+    if app.config.get("RATELIMIT_STORAGE_URI"):
+        limiter._storage_uri = app.config["RATELIMIT_STORAGE_URI"]
     limiter.init_app(app)
 
     from .models import AdminUser, CustomPage, MenuItem, SiteSetting, SocialLink
@@ -61,8 +98,11 @@ def create_app(test_config=None):
         return db.session.get(AdminUser, int(user_id))
 
     from .public.routes import bp as public_bp
+    from .public.account import bp as account_bp, samples_bp
     from .admin.routes import bp as admin_bp
     app.register_blueprint(public_bp)
+    app.register_blueprint(account_bp)
+    app.register_blueprint(samples_bp)
     app.register_blueprint(admin_bp)
     from .agent_api import bp as agent_api_bp, discovery as agent_discovery_bp
     app.register_blueprint(agent_api_bp)
@@ -125,10 +165,28 @@ def create_app(test_config=None):
             return url_for("static", filename=path[7:]) if path.startswith("static/") else path
         return url_for("public.media", filename=path)
 
+    def _sample_frame_hosts():
+        """The hosts of the samples that may be drawn inside the page.
+
+        The list is kept small and is read from the table of the
+        samples. When the table is not there yet, no sample is allowed
+        and the strict policy of the site stays as it is.
+        """
+        from .models import PortfolioLiveLink
+        from .services.frame_sources import frame_hosts
+        try:
+            links = PortfolioLiveLink.query.filter_by(is_published=True).all()
+        except Exception:
+            return []
+        return frame_hosts(links)
+
     @app.after_request
     def security_headers(response):
         from .services.https_upgrade import csp_connect_sources
+        from .services.frame_sources import csp_frame_sources
         from .services.public_origin import secure_origin
+        from .services.visitor_auth import write_cookie
+        response = write_cookie(response)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -140,6 +198,12 @@ def create_app(test_config=None):
                   f"style-src 'self' 'unsafe-inline'; {script_source}; font-src 'self'; "
                   f"connect-src 'self'; object-src 'none'; base-uri 'self'; "
                   f"form-action 'self'; frame-ancestors 'none'")
+        # A sample that is drawn inside the page comes from another
+        # address. The policy has no ``frame-src`` of its own, and so
+        # ``default-src 'self'`` would keep it out. Only the addresses
+        # that the administrator has really registered are allowed, and
+        # nothing else of the policy changes.
+        policy = csp_frame_sources(policy, _sample_frame_hosts())
         # The legacy-HTTP page probes the secure origin from the browser. When
         # that origin is a different host it has to be allowed explicitly;
         # nothing else about the strict policy changes.

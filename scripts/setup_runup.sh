@@ -363,6 +363,13 @@ Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${APP_DIR}/.env
 Environment=PATH=${APP_DIR}/.venv/bin
+# The old HTTP page is not secure, and a cookie that is marked secure
+# would not be sent back over it. The session of the old page is
+# therefore kept in a cookie of its own, which the browser is free to
+# send over the plain channel, and it does not trouble the cookie of
+# the secure page.
+Environment=COOKIE_SECURE=false
+Environment=SESSION_COOKIE_NAME=runup_session_http
 ExecStart=${APP_DIR}/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:${LEGACY_HTTP_PORT} --access-logfile - --error-logfile - "app:create_app()"
 Restart=on-failure
 RestartSec=5

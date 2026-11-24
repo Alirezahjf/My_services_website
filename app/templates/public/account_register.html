@@ -1,0 +1,67 @@
+{% extends 'base.html' %}{% from 'public/_macros.html' import icon %}{% block title %}ساختن حساب کاربری | راهکارهای نرم‌افزاری HJF{% endblock %}{% block body_class %}account-page{% endblock %}{% block content %}
+<section class="account-shell">
+  <div class="account-shell-inner">
+    <div class="account-panel account-panel-form">
+      <span class="eyebrow">حساب بازدیدکننده</span>
+      <h1>ساختن حساب شما</h1>
+      <p class="account-lead">با ساختن یک حساب، می‌توانید نمونه‌های زندهٔ محصولات را ببینید و آن‌ها را بی‌دردسر امتحان کنید. مرور معمول سایت بدون حساب هم ممکن است.</p>
+
+      <form method="post" class="account-form" novalidate>
+        {{ form.hidden_tag() }}
+        {% if request.args.get('next') %}<input type="hidden" name="next" value="{{ request.args.get('next') }}">{% endif %}
+
+        <div class="form-group {{ 'has-error' if form.display_name.errors }}">
+          {{ form.display_name.label }}
+          {{ form.display_name(class='form-control', autocomplete='name', placeholder='نام و نام خانوادگی') }}
+          {% for e in form.display_name.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <div class="form-group {{ 'has-error' if form.email.errors }}">
+          {{ form.email.label }}
+          {{ form.email(class='form-control', autocomplete='email', placeholder='you@example.com', dir='ltr') }}
+          {% for e in form.email.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <div class="form-group {{ 'has-error' if form.organization.errors }}">
+          {{ form.organization.label }}
+          {{ form.organization(class='form-control', autocomplete='organization', placeholder='مثلاً: شرکت نمونه') }}
+          {% for e in form.organization.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <div class="form-group {{ 'has-error' if form.password.errors }}">
+          {{ form.password.label }}
+          {{ form.password(class='form-control', autocomplete='new-password', dir='ltr') }}
+          <small class="field-help">دست‌کم ۸ نویسه.</small>
+          {% for e in form.password.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <div class="form-group {{ 'has-error' if form.confirm_password.errors }}">
+          {{ form.confirm_password.label }}
+          {{ form.confirm_password(class='form-control', autocomplete='new-password', dir='ltr') }}
+          {% for e in form.confirm_password.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <label class="check-line">
+          {{ form.remember() }}
+          <span>{{ form.remember.label.text }}</span>
+        </label>
+
+        <button class="button button-primary button-block" type="submit">ساختن حساب</button>
+      </form>
+
+      <p class="account-switch">حساب دارید؟ <a href="{{ url_for('account.login', next=request.args.get('next','')) }}">ورود به حساب</a></p>
+    </div>
+
+    <aside class="account-panel account-panel-aside">
+      <span class="account-aside-mark" aria-hidden="true">{{ icon('layers', 30) }}</span>
+      <h2>چه چیزی به دست می‌آورید؟</h2>
+      <ul class="account-points">
+        <li><span>{{ icon('check',16) }}</span><p>دسترسی به نمونه‌های زندهٔ محصولات، بدون نیاز به درخواست جداگانه.</p></li>
+        <li><span>{{ icon('check',16) }}</span><p>پرونده‌ای از نمونه‌هایی که دیده‌اید، در حساب خودتان.</p></li>
+        <li><span>{{ icon('check',16) }}</span><p>گفت‌وگوی مستقیم‌تر با ما دربارهٔ محصولی که امتحان کرده‌اید.</p></li>
+      </ul>
+      <p class="account-aside-foot">رمز عبور شما به‌صورت هش نگه داشته می‌شود و نشانی رایانامه شما تنها برای همین حساب به کار می‌رود.</p>
+    </aside>
+  </div>
+</section>
+{% endblock %}

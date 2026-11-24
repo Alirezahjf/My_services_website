@@ -14,6 +14,11 @@ def app(tmp_path):
         "TESTING": True,
         "WTF_CSRF_ENABLED": False,
         "RATELIMIT_ENABLED": False,
+        # The counter of the limiter lives in one place for the whole
+        # process. The tests make many small applications one after
+        # another, and each of them must begin with an empty counter,
+        # or a test would be troubled by the test that came before it.
+        "RATELIMIT_STORAGE_URI": "memory://",
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database}",
         "UPLOAD_FOLDER": tmp_path / "uploads",
         "SECRET_KEY": "test-secret",

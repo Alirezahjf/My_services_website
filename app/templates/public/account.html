@@ -1,0 +1,49 @@
+{% extends 'base.html' %}{% from 'public/_macros.html' import icon %}{% block title %}حساب من | راهکارهای نرم‌افزاری HJF{% endblock %}{% block body_class %}account-page{% endblock %}{% block content %}
+<section class="account-shell">
+  <div class="account-shell-inner account-shell-inner-wide">
+    <div class="account-panel account-panel-form">
+      <span class="eyebrow">حساب شما</span>
+      <h1>{{ visitor.display_name }}</h1>
+      <p class="account-lead">{{ visitor.email }}{% if visitor.organization %} · {{ visitor.organization }}{% endif %}</p>
+
+      <dl class="account-stats">
+        <div><dt>شمارهٔ بازدید از حساب</dt><dd>{{ visitor.login_count }}</dd></div>
+        <div><dt>نمونه‌های بازشده</dt><dd>{{ opened|length }}</dd></div>
+        <div><dt>آخرین ورود</dt><dd>{{ visitor.last_login_at.strftime('%Y/%m/%d') if visitor.last_login_at else '—' }}</dd></div>
+      </dl>
+
+      <form method="post" action="{{ url_for('account.logout') }}" class="account-logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="button button-quiet" type="submit">خروج از حساب</button>
+      </form>
+    </div>
+
+    <div class="account-panel account-panel-opened">
+      <div class="account-opened-head">
+        <h2>نمونه‌هایی که باز کرده‌اید</h2>
+        <a class="account-opened-more" href="{{ url_for('public.portfolio') }}">دیدن نمونه‌کارها</a>
+      </div>
+
+      {% if opened %}
+      <ul class="opened-list">
+        {% for row in opened %}
+        <li class="opened-item">
+          <div class="opened-item-text">
+            <h3><a href="{{ url_for('samples.sample', link_id=row.live_link.id) if row.live_link else '#' }}">{{ row.live_link.title if row.live_link else 'نمونهٔ حذف‌شده' }}</a></h3>
+            <p>
+              {% if row.product %}<a href="{{ url_for('public.product_detail', slug=row.product.slug) }}">{{ row.product.name }}</a>{% else %}—{% endif %}
+              <span aria-hidden="true">·</span>
+              <time datetime="{{ row.opened_at.isoformat() }}">{{ row.opened_at.strftime('%Y/%m/%d') }}</time>
+            </p>
+          </div>
+          <a class="opened-item-go" href="{{ url_for('samples.sample', link_id=row.live_link.id) if row.live_link else '#' }}" aria-label="باز کردن دوبارهٔ {{ row.live_link.title if row.live_link else 'نمونه' }}">{{ icon('arrow', 18) }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty-note">هنوز نمونه‌ای باز نکرده‌اید. از بخش <a href="{{ url_for('public.portfolio') }}">نمونه‌کارها</a> یکی را انتخاب کنید.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

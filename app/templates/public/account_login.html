@@ -1,0 +1,48 @@
+{% extends 'base.html' %}{% from 'public/_macros.html' import icon %}{% block title %}ورود به حساب کاربری | راهکارهای نرم‌افزاری HJF{% endblock %}{% block body_class %}account-page{% endblock %}{% block content %}
+<section class="account-shell">
+  <div class="account-shell-inner">
+    <div class="account-panel account-panel-form">
+      <span class="eyebrow">حساب بازدیدکننده</span>
+      <h1>ورود به حساب شما</h1>
+      <p class="account-lead">نمونه‌های زندهٔ محصولات فقط به بازدیدکننده‌ای داده می‌شود که نامشان معلوم است. با ورود به حساب، از این پس هر نمونه‌ای را که باز می‌کنید در پروندهٔ خودتان می‌ماند.</p>
+
+      <form method="post" class="account-form" novalidate>
+        {{ form.hidden_tag() }}
+        {% if request.args.get('next') %}<input type="hidden" name="next" value="{{ request.args.get('next') }}">{% endif %}
+
+        <div class="form-group {{ 'has-error' if form.email.errors }}">
+          {{ form.email.label }}
+          {{ form.email(class='form-control', autocomplete='email', placeholder='you@example.com', dir='ltr') }}
+          {% for e in form.email.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <div class="form-group {{ 'has-error' if form.password.errors }}">
+          {{ form.password.label }}
+          {{ form.password(class='form-control', autocomplete='current-password', dir='ltr') }}
+          {% for e in form.password.errors %}<small class="field-error">{{ e }}</small>{% endfor %}
+        </div>
+
+        <label class="check-line">
+          {{ form.remember() }}
+          <span>{{ form.remember.label.text }}</span>
+        </label>
+
+        <button class="button button-primary button-block" type="submit">ورود به حساب</button>
+      </form>
+
+      <p class="account-switch">حساب ندارید؟ <a href="{{ url_for('account.register', next=request.args.get('next','')) }}">ساختن حساب</a></p>
+    </div>
+
+    <aside class="account-panel account-panel-aside">
+      <span class="account-aside-mark" aria-hidden="true">{{ icon('layers', 30) }}</span>
+      <h2>چرا ورود لازم است؟</h2>
+      <ul class="account-points">
+        <li><span>{{ icon('check',16) }}</span><p>هر نمونهٔ زنده با نام شما ثبت می‌شود، نه با نام ناشناس.</p></li>
+        <li><span>{{ icon('check',16) }}</span><p>نمونه‌هایی که باز کرده‌اید در حساب شما جمع می‌شوند.</p></li>
+        <li><span>{{ icon('check',16) }}</span><p>وقتی خواستید دربارهٔ محصول حرف بزنید، می‌دانیم با چه چیزی کار کرده‌اید.</p></li>
+      </ul>
+      <p class="account-aside-foot">حساب شما فقط در همین مرورگر می‌ماند و رمز عبور به‌صورت هش نگه داشته می‌شود.</p>
+    </aside>
+  </div>
+</section>
+{% endblock %}

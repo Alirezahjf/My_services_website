@@ -56,6 +56,13 @@
         {% for page in page_menus.hamburger %}<a class="mobile-only" href="{{ url_for('public.custom_page',page_path=page.slug) }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if page.open_in_new_tab }}>{{ page.menu_title or page.title }}</a>{% endfor %}
         {% for item in custom_menu_items if item.location in ['main','hamburger'] and item.is_visible %}<a class="{{ 'desktop-only' if item.location=='main' else 'mobile-only' }}" href="{{ item.href }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if item.open_in_new_tab }}>{{ item.title }}</a>{% if item.children %}<details class="nav-submenu {{ 'desktop-only' if item.location=='main' else 'mobile-only' }}"><summary>زیرمنوی {{ item.title }}</summary>{% for child in item.children if child.is_visible %}<a href="{{ child.href }}" {{ 'target="_blank" rel="noopener noreferrer"'|safe if child.open_in_new_tab }}>{{ child.title }}</a>{% endfor %}</details>{% endif %}{% endfor %}
       </nav>
+      {% set visitor = visitor_account() %}
+      <a class="header-account" href="{{ url_for('account.account') if visitor else url_for('account.login') }}" aria-label="{{ 'حساب من' if visitor else 'ورود یا ساختن حساب' }}">
+        <span class="header-account-mark" aria-hidden="true">
+          {% if visitor %}{{ visitor.display_name[:1] }}{% else %}{% from 'public/_macros.html' import icon %}{{ icon('user', 15) }}{% endif %}
+        </span>
+        <span class="header-account-text">{{ visitor.display_name if visitor else 'ورود / ثبت‌نام' }}</span>
+      </a>
       <a class="button button-primary header-cta" href="{{ url_for('public.consultation') }}">درخواست مشاوره <span aria-hidden="true">↙</span></a>
     </div>
   </header>

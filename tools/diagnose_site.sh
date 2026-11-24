@@ -130,7 +130,50 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-hr "6. the stylesheet and the script as the browser gets them"
+hr "6. the account of the visitor and the samples"
+
+# The account of the visitor is a separate thing from the account of
+# the manager. When one of them is broken, the visitor cannot try a
+# sample. The check asks the running service for the pages of the
+# account, and it must answer without an error.
+echo "  the pages of the account:"
+for path in /account/login /account/register /account/; do
+  printf '    %-22s -> ' "$path"
+  curl -sS -o /dev/null -w '%{http_code}\n' --max-time 10 \
+    "http://127.0.0.1:${LEGACY_HTTP_PORT}${path}" 2>&1 | tr -d '\n' | sed 's/^/ /'; echo
+done
+
+echo "  the tables of the account:"
+if [[ -f "$APP_DIR/instance/services.sqlite3" ]]; then
+  for table in visitors portfolio_live_links sample_accesses; do
+    count="$(sqlite3 "$APP_DIR/instance/services.sqlite3" \
+      "select count(*) from ${table};" 2>/dev/null || echo '?')"
+    printf '    %-24s %s rows\n' "$table" "$count"
+  done
+else
+  echo "    (the database of the site is not at the usual place)"
+fi
+
+echo "  the rule that keeps the samples for those who have signed in:"
+sample_id="$(sqlite3 "$APP_DIR/instance/services.sqlite3" \
+  "select id from portfolio_live_links where is_published = 1 and requires_login = 1 limit 1;" 2>/dev/null || true)"
+if [[ -z "$sample_id" ]]; then
+  # The tool of the database may be missing, and so the answer is asked
+  # of the running service itself.
+  sample_id="$(curl -sS --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/admin/live-links" 2>/dev/null \
+    | grep -o '/samples/[0-9]*' | head -1 | grep -o '[0-9]*' || true)"
+fi
+if [[ -n "$sample_id" ]]; then
+  printf '    a sample that asks for a sign-in, seen by a stranger -> '
+  curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' --max-time 10 \
+    "http://127.0.0.1:${LEGACY_HTTP_PORT}/samples/${sample_id}" 2>&1 | tr -d '\n' | sed 's/^/ /'; echo
+  echo "    (302 to the sign-in page is the right answer)"
+else
+  echo "    (there is no sample that asks for a sign-in yet)"
+fi
+
+# ---------------------------------------------------------------------------
+hr "7. the stylesheet and the script as the browser gets them"
 echo "  the sheet:"
 curl -sSI --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/static/css/main.css" 2>&1 | sed 's/^/    /' | head -18
 echo "  the script:"
@@ -180,7 +223,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-hr "7. what the page itself carries"
+hr "8. what the page itself carries"
 html="$(curl -sS --max-time 10 "http://127.0.0.1:${LEGACY_HTTP_PORT}/" 2>&1 || true)"
 echo "  length of the page: ${#html}"
 echo "$html" | grep -o 'href="[^"]*main\.css[^"]*"' | sed 's/^/    /' | head -2
@@ -188,7 +231,7 @@ echo "$html" | grep -o 'src="[^"]*main\.js[^"]*"' | sed 's/^/    /' | head -2
 echo "$html" | grep -c 'data-page-enter' | sed 's/^/    data-page-enter count: /'
 
 # ---------------------------------------------------------------------------
-hr "8. the certificate"
+hr "9. the certificate"
 for f in "$APP_DIR/instance/tls/fullchain.pem" "$APP_DIR/instance/tls/privkey.pem" \
          "$APP_DIR/cert.pem" "$APP_DIR/key.pem"; do
   if [[ -f "$f" ]]; then
@@ -234,7 +277,7 @@ if [[ -n "${TLS_CERT_PATH:-}" && -f "${TLS_CERT_PATH}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-hr "9. the recent lines of the units"
+hr "10. the recent lines of the units"
 for unit in "$WEB_SERVICE" "$TLS_SERVICE"; do
   echo "  $unit:"
   journalctl -u "$unit" -n 20 --no-pager 2>&1 | sed 's/^/    /'

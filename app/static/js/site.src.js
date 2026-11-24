@@ -616,6 +616,75 @@
   }
 
   /* ------------------------------------------------------------------
+     The sample of a product.
+
+     The sample is not drawn the moment the page opens. The visitor is
+     asked first, and the sample is put in the frame only when they
+     say so. The page is thus quick, and the visitor knows that
+     something is about to happen.
+     ------------------------------------------------------------------ */
+
+  function attachSampleFrame() {
+    const holder = document.querySelector('[data-sample-frame]');
+    if (!holder) return;
+
+    const frame = holder.querySelector('.sample-frame');
+    const source = holder.dataset.sampleUrl || (frame ? frame.dataset.src : '');
+    const button = holder.querySelector('[data-sample-start]');
+    const note = holder.querySelector('[data-sample-note]');
+    const state = holder.querySelector('[data-sample-state]');
+
+    if (!frame) return;
+
+    // The frame is empty until the visitor asks for it.
+    if (source) {
+      frame.removeAttribute('src');
+      frame.setAttribute('data-src', source);
+    }
+
+    const say = (text, kind) => {
+      if (!state) return;
+      state.textContent = text;
+      state.setAttribute('data-kind', kind || '');
+      state.hidden = false;
+    };
+
+    const show = () => {
+      const url = frame.getAttribute('data-src');
+      if (!url) return;
+      frame.setAttribute('src', url);
+      frame.hidden = false;
+      holder.classList.add('is-loading');
+      say('نمونه در حال باز شدن است…', 'loading');
+
+      // The frame says when it is ready. Not every browser tells it,
+      // so a short while later the waiting is ended anyway.
+      const settle = () => {
+        holder.classList.remove('is-loading');
+        say('نمونه باز شد.', 'ready');
+        frame.hidden = false;
+      };
+      frame.addEventListener('load', settle, { once: true });
+      window.setTimeout(settle, 4000);
+    };
+
+    if (button) {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        button.hidden = true;
+        show();
+      });
+    } else {
+      // Without a button the sample is shown at once.
+      show();
+    }
+
+    if (note && !note.textContent.trim()) {
+      note.textContent = 'اگر نمونه در کادر بالا باز نشد، آن را در زبانهٔ تازه ببینید.';
+    }
+  }
+
+  /* ------------------------------------------------------------------
      Start.
      ------------------------------------------------------------------ */
 
@@ -628,6 +697,7 @@
     attachEntrance();
     attachTilt();
     attachPageLeave();
+    attachSampleFrame();
   }
 
   if (document.readyState === 'loading') {

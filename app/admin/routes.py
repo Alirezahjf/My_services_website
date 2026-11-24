@@ -8,16 +8,17 @@ import bleach
 from flask import Blueprint, Response, abort, flash, g, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 from sqlalchemy import func, or_
+from sqlalchemy.orm import joinedload
 from app.extensions import db, limiter
 from app.models import (ActivityLog, AdminUser, Category, ContactMessage, FAQ, GitHubSyncLog,
                         AgentActivity, AgentApproval, AgentConnection, CustomPage, Lead, MenuItem, PageContent, Portfolio,
-                        PortfolioMedia, PlatformConnector, Product, ProductFeature, ProductMedia, ProductModule, ProductPortfolio,
-                        ProductRepository, RepositoryAnalysis, Service, SiteSetting, SocialLink, Tag, WorkflowStep)
+                        PortfolioLiveLink, PortfolioMedia, PlatformConnector, Product, ProductFeature, ProductMedia, ProductModule, ProductPortfolio,
+                        ProductRepository, RepositoryAnalysis, SampleAccess, Service, SiteSetting, SocialLink, Tag, Visitor, WorkflowStep)
 from app.github_sync.service import sync_repository
 from app.services.activity import log_activity
 from app.services.media_service import MediaValidationError, delete_upload, save_upload
 from app.services.utils import client_ip_hash, slugify, split_lines
-from .forms import (CategoryForm, ConnectorForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LoginForm,
+from .forms import (CategoryForm, ConnectorForm, DeleteForm, FAQForm, FeatureForm, LeadUpdateForm, LiveLinkForm, LoginForm,
                     AgentConnectionForm, CustomPageForm, MediaForm, MenuItemForm, ModuleForm, PageContentForm, PasswordForm, PortfolioForm, PortfolioMediaEditForm, ProductForm, ProductMediaEditForm,
                     ServiceForm, SettingsForm, SocialForm, WorkflowForm)
 from app.services.page_service import PageValidationError, apply_page_data, page_dict, set_page_status
@@ -508,6 +509,90 @@ def portfolio_delete(portfolio_id):
     db.session.commit()
     flash("نمونه‌کار حذف شد.", "success")
     return redirect(url_for("admin.portfolios"))
+
+
+# ---------------------------------------------------------------------------
+# The samples of the products
+# ---------------------------------------------------------------------------
+
+
+def live_link_choices():
+    """The samples of every portfolio, for the choice of the manager."""
+    rows = (
+        PortfolioLiveLink.query
+        .options(joinedload(PortfolioLiveLink.portfolio), joinedload(PortfolioLiveLink.product))
+        .order_by(PortfolioLiveLink.portfolio_id, PortfolioLiveLink.position, PortfolioLiveLink.id)
+        .all()
+    )
+    return rows
+
+
+@bp.get("/live-links")
+@login_required
+def live_links():
+    """The list of the samples that are given to the visitors."""
+    return render_template(
+        "admin/live_links.html",
+        links=live_link_choices(),
+        delete_form=DeleteForm(),
+        visitors=Visitor.query.order_by(Visitor.created_at.desc()).limit(50).all(),
+        visitor_count=Visitor.query.count(),
+        access_count=SampleAccess.query.count(),
+    )
+
+
+@bp.route("/live-links/new", methods=["GET", "POST"])
+@bp.route("/live-links/<int:link_id>/edit", methods=["GET", "POST"])
+@login_required
+def live_link_edit(link_id=None):
+    """A sample is made, or changed."""
+    item = PortfolioLiveLink.query.get_or_404(link_id) if link_id else None
+    form = LiveLinkForm(obj=item)
+    form.portfolio_id.choices = [
+        (p.id, p.title) for p in Portfolio.query.order_by(Portfolio.position, Portfolio.title).all()
+    ]
+    form.product_id.choices = products_choices(empty=(0, "— بدون محصول —"))
+    if item and request.method == "GET":
+        form.product_id.data = item.product_id
+    if form.validate_on_submit():
+        link = item or PortfolioLiveLink()
+        data = form.data
+        # The empty choice of the product means that the sample belongs
+        # to no product at all.
+        product_id = data.get("product_id") or None
+        link.portfolio_id = data["portfolio_id"]
+        link.product_id = product_id
+        link.title = data["title"].strip()
+        link.url = data["url"].strip()
+        link.summary = (data.get("summary") or "").strip() or None
+        link.display_mode = data["display_mode"]
+        link.requires_login = bool(data.get("requires_login"))
+        link.is_published = bool(data.get("is_published"))
+        link.position = data.get("position") or 0
+        if not item:
+            db.session.add(link)
+        log_activity("update" if item else "create", "PortfolioLiveLink", detail=link.title)
+        db.session.commit()
+        flash("نمونه ذخیره شد.", "success")
+        return redirect(url_for("admin.live_links"))
+    return render_template(
+        "admin/simple_form.html",
+        form=form,
+        title="ویرایش نمونه" if item else "نمونهٔ تازه",
+        back_url=url_for("admin.live_links"),
+    )
+
+
+@bp.post("/live-links/<int:link_id>/delete")
+@login_required
+def live_link_delete(link_id):
+    """A sample is taken away."""
+    item = PortfolioLiveLink.query.get_or_404(link_id)
+    db.session.delete(item)
+    log_activity("delete", "PortfolioLiveLink", item.id, item.title)
+    db.session.commit()
+    flash("نمونه حذف شد.", "success")
+    return redirect(url_for("admin.live_links"))
 
 
 @bp.get("/media")

@@ -1,0 +1,112 @@
+{% extends 'base.html' %}{% from 'public/_macros.html' import icon %}{% block title %}{{ link.title }} — نمونهٔ زنده | راهکارهای نرم‌افزاری HJF{% endblock %}{% block body_class %}sample-page{% endblock %}{% block content %}
+<section class="sample-shell">
+  <div class="sample-head">
+    <nav class="crumbs" aria-label="مسیر">
+      <a href="{{ url_for('public.home') }}">خانه</a>
+      <span aria-hidden="true">/</span>
+      <a href="{{ url_for('public.portfolio') }}">نمونه‌کارها</a>
+      {% if link.portfolio %}<span aria-hidden="true">/</span><a href="{{ url_for('public.portfolio_detail', slug=link.portfolio.slug) }}">{{ link.portfolio.title }}</a>{% endif %}
+      <span aria-hidden="true">/</span><span aria-current="page">{{ link.title }}</span>
+    </nav>
+
+    <div class="sample-head-row">
+      <div class="sample-head-text">
+        <span class="eyebrow">نمونهٔ زنده</span>
+        <h1>{{ link.title }}</h1>
+        {% if link.summary %}<p class="sample-lead">{{ link.summary }}</p>{% endif %}
+      </div>
+
+      <div class="sample-head-actions">
+        {% if visitor %}
+          <span class="sample-as-visitor" title="نمونه با حساب شما باز شده است">
+            <span class="sample-avatar" aria-hidden="true">{{ visitor.display_name[:1] }}</span>
+            <span>با حساب {{ visitor.display_name }} باز شده</span>
+          </span>
+        {% else %}
+          <span class="sample-as-visitor sample-as-guest">
+            <span class="sample-avatar" aria-hidden="true">؟</span>
+            <span>نمونهٔ عمومی</span>
+          </span>
+        {% endif %}
+        <a class="button button-quiet button-sm" href="{{ url_for('account.account') }}">حساب من</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="sample-body">
+    {% if link.display_mode == 'live' %}
+      <div class="sample-frame-wrap" data-sample-frame>
+        <div class="sample-frame-bar">
+          <span class="sample-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="sample-frame-url" dir="ltr">{{ link.url }}</span>
+          <a class="sample-frame-open" href="{{ link.url }}" target="_blank" rel="noopener noreferrer" title="باز کردن در زبانهٔ تازه">
+            {{ icon('external', 16) }}<span>در زبانهٔ تازه</span>
+          </a>
+        </div>
+        <div class="sample-frame-holder">
+          <div class="sample-frame-cover">
+            <div class="sample-cover-art" aria-hidden="true">
+              <span class="sample-art-grid"></span>
+              <span class="sample-art-orb"></span>
+              <span class="sample-art-emblem">{{ icon('layers', 30) }}</span>
+            </div>
+            <p class="sample-cover-title">{{ link.title }}</p>
+            <p class="sample-cover-text">نمونهٔ زندهٔ این محصول در همین صفحه باز می‌شود.</p>
+            <button class="button button-primary button-lg" type="button" data-sample-start>باز کردن نمونهٔ زنده</button>
+            <p class="sample-cover-note">نمونه در یک کادر جدا باز می‌شود و به این صفحه دسترسی ندارد.</p>
+          </div>
+          <iframe class="sample-frame" data-src="{{ link.url }}" title="{{ link.title }}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox" allow="fullscreen" hidden></iframe>
+          <noscript>
+            <div class="sample-noscript">
+              <p>برای دیدن این نمونه در همین صفحه، جاوااسکریپت باید روشن باشد.</p>
+              <a class="button button-primary" href="{{ link.url }}" target="_blank" rel="noopener noreferrer">باز کردن نمونه در زبانهٔ تازه</a>
+            </div>
+          </noscript>
+        </div>
+        <p class="sample-frame-note" data-sample-note>اگر نمونه در کادر بالا باز نشد، آن را در زبانهٔ تازه ببینید.</p>
+        <p class="sample-frame-state" data-sample-state role="status" aria-live="polite" hidden></p>
+      </div>
+    {% else %}
+      <div class="sample-plain">
+        <div class="sample-plain-art" aria-hidden="true">
+          <span class="sample-art-grid"></span>
+          <span class="sample-art-orb"></span>
+          <span class="sample-art-emblem">{{ icon('external', 34) }}</span>
+        </div>
+        <h2>این نمونه در زبانهٔ تازه باز می‌شود</h2>
+        {% if link.summary %}<p>{{ link.summary }}</p>{% endif %}
+        <a class="button button-primary button-lg" href="{{ link.url }}" target="_blank" rel="noopener noreferrer">
+          <span>باز کردن نمونه</span>{{ icon('external', 18) }}
+        </a>
+        <p class="sample-plain-url" dir="ltr">{{ link.url }}</p>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if related %}
+  <div class="sample-related">
+    <div class="sample-related-head">
+      <span class="eyebrow">محصول مرتبط</span>
+      <h2>{{ related.name }}</h2>
+      {% if related.tagline %}<p>{{ related.tagline }}</p>{% endif %}
+    </div>
+    <div class="sample-related-body">
+      <div class="sample-related-text">
+        {% if related.short_description %}<p>{{ related.short_description }}</p>{% endif %}
+        <a class="button button-primary" href="{{ url_for('public.product_detail', slug=related.slug) }}">مشاهدهٔ صفحهٔ محصول</a>
+      </div>
+      <ul class="sample-related-meta">
+        <li><span>دسته</span><strong>{{ related.category.name if related.category else '—' }}</strong></li>
+        <li><span>نوع</span><strong>{{ {'ai':'هوش مصنوعی','automation':'اتوماسیون','library':'کتابخانه','infrastructure':'زیرساخت','service':'سرویس','software':'نرم‌افزار'}.get(related.product_type, 'نرم‌افزار') }}</strong></li>
+        {% if related.price_label %}<li><span>قیمت</span><strong>{{ related.price_label }}</strong></li>{% endif %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="sample-foot">
+    <p>نمونه را دیدید و دربارهٔ آن می‌خواهید حرف بزنید؟</p>
+    <a class="button button-quiet" href="{{ url_for('public.consultation') }}">درخواست مشاوره</a>
+  </div>
+</section>
+{% endblock %}

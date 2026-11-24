@@ -1,0 +1,66 @@
+{% extends 'admin/base.html' %}{% from 'admin/_macros.html' import delete_button %}{% block title %}نمونه‌ها و حساب‌های بازدیدکننده{% endblock %}{% block actions %}<a class="admin-primary" href="{{ url_for('admin.live_link_edit') }}">＋ نمونهٔ تازه</a>{% endblock %}{% block content %}
+<section class="admin-panel">
+  <div class="admin-panel-head">
+    <h2>نمونه‌های محصولات</h2>
+    <p>برای هر نمونه‌کار می‌توانید یک یا چند نمونهٔ قابل استفاده ثبت کنید. برای هر نمونه، محصول مرتبط، نحوهٔ نمایش (زنده در صفحه یا لینک در زبانهٔ تازه) و شرط ورود را برگزینید.</p>
+  </div>
+
+  <div class="table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>عنوان</th><th>نمونه‌کار</th><th>محصول مرتبط</th><th>نحوهٔ نمایش</th><th>ورود</th><th>باز شده</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+      <tbody>
+      {% for item in links %}
+        <tr>
+          <td><strong>{{ item.title }}</strong><small class="block-text" dir="ltr">{{ item.url }}</small></td>
+          <td>{{ item.portfolio.title if item.portfolio else '—' }}</td>
+          <td>{% if item.product %}<span class="small-tag">{{ item.product.name }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td><span class="small-tag">{{ 'زنده در صفحه' if item.display_mode == 'live' else 'لینک در زبانهٔ تازه' }}</span></td>
+          <td>{{ 'لازم' if item.requires_login else 'آزاد' }}</td>
+          <td>{{ item.open_count|fa_num }}</td>
+          <td>{{ 'منتشرشده' if item.is_published else 'پیش‌نویس' }}</td>
+          <td><div class="table-actions">
+            <a href="{{ url_for('admin.live_link_edit', link_id=item.id) }}">ویرایش</a>
+            {% if item.is_published %}<a href="{{ url_for('samples.sample', link_id=item.id) }}" target="_blank">مشاهده</a>{% endif %}
+            {{ delete_button(url_for('admin.live_link_delete', link_id=item.id)) }}
+          </div></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8"><div class="admin-empty">هنوز نمونه‌ای ثبت نشده است. برای جلوگیری از محتوای ساختگی، داده نمایشی ایجاد نشده است.</div></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="admin-panel">
+  <div class="admin-panel-head">
+    <h2>حساب‌های بازدیدکننده</h2>
+    <p>هر حسابی که بازدیدکننده ساخته، با نامی که خودش نوشته و نشانی رایانامه‌اش نگه داشته می‌شود. رمز عبور به‌صورت هش نگه داشته می‌شود و نشانی شبکه تنها به‌صورت هش نگه داشته می‌شود.</p>
+  </div>
+
+  <div class="admin-stat-row">
+    <div class="admin-stat"><span>شمارهٔ حساب‌ها</span><strong>{{ visitor_count|fa_num }}</strong></div>
+    <div class="admin-stat"><span>شمارهٔ باز کردن نمونه</span><strong>{{ access_count|fa_num }}</strong></div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>نام</th><th>رایانامه</th><th>سازمان</th><th>ورود</th><th>آخرین ورود</th><th>وضعیت</th></tr></thead>
+      <tbody>
+      {% for row in visitors %}
+        <tr>
+          <td><strong>{{ row.display_name }}</strong></td>
+          <td dir="ltr">{{ row.email }}</td>
+          <td>{{ row.organization or '—' }}</td>
+          <td>{{ row.login_count|fa_num }}</td>
+          <td>{{ row.last_login_at.strftime('%Y/%m/%d') if row.last_login_at else '—' }}</td>
+          <td>{{ 'فعال' if row.is_active else 'غیرفعال' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6"><div class="admin-empty">هنوز حسابی ساخته نشده است.</div></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

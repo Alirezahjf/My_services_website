@@ -3,6 +3,7 @@ from flask_wtf.file import FileAllowed, FileField, MultipleFileField
 from wtforms import BooleanField, DateField, IntegerField, PasswordField, SelectField, SelectMultipleField, StringField, TextAreaField
 from wtforms.validators import DataRequired, EqualTo, Length, NumberRange, Optional, URL, ValidationError
 from app.models import Product
+from app.extensions import db
 from app.services.agent_service import PERMISSIONS
 
 IMAGE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "svg"]
@@ -152,6 +153,45 @@ class PortfolioForm(FlaskForm):
     show_on_home = BooleanField("نمایش در صفحه اصلی")
     show_on_product = BooleanField("نمایش در محصول", default=True)
     show_in_gallery = BooleanField("نمایش در گالری", default=True)
+
+
+class LiveLinkForm(FlaskForm):
+    """The form of a sample that is given to the visitors.
+
+    The manager chooses for every sample whether it is shown inside the
+    page as a live frame, or only as a link that opens in a new tab.
+    """
+    portfolio_id = SelectField("نمونه‌کار", coerce=int, validators=[DataRequired(message="نمونه‌کار را برگزینید.")])
+    product_id = SelectField("محصول مرتبط", coerce=int, validators=[Optional()])
+    title = StringField("عنوان نمونه", validators=[DataRequired(), Length(max=180)])
+    url = StringField("نشانی نمونه", validators=[DataRequired(), Length(max=600), URL(require_tld=False, message="نشانی نمونه درست نیست.")])
+    summary = TextAreaField("توضیح کوتاه", validators=[Optional(), Length(max=2000)])
+    display_mode = SelectField("نحوهٔ نمایش", choices=[("live", "نمایش زنده در صفحه (iframe)"), ("link", "نمایش لینک و باز شدن در زبانهٔ تازه")], validators=[DataRequired()])
+    requires_login = BooleanField("برای باز کردن نمونه ورود لازم باشد", default=True)
+    is_published = BooleanField("منتشر شود", default=True)
+    position = IntegerField("ترتیب", default=0)
+
+    def validate_url(self, field):
+        """Only the addresses of the web are taken.
+
+        The sample is put inside a frame of this site, so an address of
+        another kind would break the page.
+        """
+        value = (field.data or "").strip()
+        if not value:
+            return
+        if not value.startswith(("http://", "https://")):
+            raise ValidationError("نشانی نمونه باید با http:// یا https:// آغاز شود.")
+        if len(value) > 600:
+            raise ValidationError("نشانی نمونه بسیار بلند است.")
+
+    def validate_product_id(self, field):
+        """The product must exist, when one is chosen."""
+        if not field.data:
+            return
+        from app.models import Product
+        if db.session.get(Product, int(field.data)) is None:
+            raise ValidationError("محصول برگزینده‌شده یافت نشد.")
 
 
 class FAQForm(FlaskForm):
